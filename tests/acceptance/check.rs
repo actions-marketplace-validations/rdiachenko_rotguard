@@ -27,7 +27,45 @@ async fn s7_checks_each_distinct_url_once() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "pending: S8"]
-async fn s8_one_request_at_a_time_per_host() {
+async fn s8_starts_requests_to_a_host_one_interval_apart() {
+    let mut w = World::new().await;
+    w.configure(|s| s.host_interval_ms = 300);
+    // Instant replies: only `host_interval_ms` can keep consecutive starts apart.
+    let routes = ["/p1", "/p2", "/p3"]
+        .into_iter()
+        .fold(Routes::new(), |r, p| r.fixed(p, page("P", "page")))
+        .fixed_re(".*", status(404));
+    w.serve(routes).await;
+    w.site.write(
+        "post.md",
+        &format!(
+            "[a]({})\n\n[b]({})\n\n[c]({})\n",
+            w.url("/p1"),
+            w.url("/p2"),
+            w.url("/p3")
+        ),
+    );
+
+    let out = w.run(&[]).await;
+
+    out.assert_summary(Summary {
+        checked: 3,
+        ok: 3,
+        ..Summary::default()
+    });
+    // Soft-404 probes are requests to the host too (R6: they wait at the host gate).
+    let all = w.log.all();
+    assert!(all.len() >= 3, "requests: {all:?}");
+    assert_gaps(&all, Duration::from_millis(300));
+    for req in &all {
+        assert_eq!(req.method, "GET");
+        assert_eq!(req.user_agent.as_deref(), Some(USER_AGENT), "{}", req.path);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "pending: S8"]
+async fn s8_requests_to_a_host_do_not_overlap() {
     let mut w = World::new().await;
     w.configure(|s| s.host_interval_ms = 300);
     let delay = Duration::from_millis(350);
@@ -58,7 +96,7 @@ async fn s8_one_request_at_a_time_per_host() {
     let all = w.log.all();
     assert!(all.len() >= 3, "requests: {all:?}");
     // The reply takes longer than the interval, so only one request in flight keeps the gap
-    // at the reply time or more.
+    // at the reply time or more. (The interval itself is tested without delay above.)
     assert_gaps(&all, delay);
     for req in &all {
         assert_eq!(req.method, "GET");

@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
 
 use crate::support::{Routes, Summary, World, lines_at, page, redirect, status};
 
@@ -19,19 +20,33 @@ fn mixed_routes(w: &World) -> Routes {
 #[ignore = "pending: S31"]
 async fn s31_entries_sorted_and_summary_counts() {
     let w = World::new().await;
-    w.serve(mixed_routes(&w)).await;
-    w.site.write(
-        "a.md",
-        &lines_at(&[
-            (2, format!("[p]({})", w.url("/old"))),
-            (9, format!("[d]({})", w.url("/gone"))),
-        ]),
-    );
+    // `a.md:2` sorts first but finishes last: its host is slow to answer. `localhost` is
+    // another host than `127.0.0.1`, so the per-host gate doesn't serialise the two.
+    let slow = Duration::from_millis(500);
+    w.serve(
+        Routes::new()
+            .fixed("/old", redirect(301, &w.url("/new")).set_delay(slow))
+            .fixed("/new", page("New", "new home"))
+            .fixed("/gone", status(404))
+            .fixed("/deep/page", redirect(301, &w.url("/")))
+            .fixed("/", page("Home", "welcome"))
+            .fixed("/fine", page("Fine", "all good")),
+    )
+    .await;
+    let slow_old = w.url("/old").replace("127.0.0.1", "localhost");
+    // `b.md` is created first, so neither creation order nor finishing order is sorted.
     w.site.write(
         "b.md",
         &lines_at(&[
             (3, format!("[o]({})", w.url("/fine"))),
             (7, format!("[s]({})", w.url("/deep/page"))),
+        ]),
+    );
+    w.site.write(
+        "a.md",
+        &lines_at(&[
+            (2, format!("[p]({slow_old})")),
+            (9, format!("[d]({})", w.url("/gone"))),
         ]),
     );
 

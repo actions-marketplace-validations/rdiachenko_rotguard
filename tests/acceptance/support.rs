@@ -212,6 +212,7 @@ pub struct Capture {
     timestamp: String,
     url: String,
     original: String,
+    status: u16,
 }
 
 impl Capture {
@@ -224,7 +225,18 @@ impl Capture {
             timestamp: timestamp.to_owned(),
             url: url.to_owned(),
             original: original.to_owned(),
+            status: 200,
         }
+    }
+
+    /// The same capture, archived with another HTTP status.
+    #[expect(
+        dead_code,
+        reason = "no scenario's Given includes a non-200 capture; the mock still models one"
+    )]
+    pub fn with_status(mut self, status: u16) -> Self {
+        self.status = status;
+        self
     }
 }
 
@@ -275,6 +287,11 @@ impl Cdx {
             .filter(|c| params.get("url").is_some_and(|u| *u == c.url))
             .filter(|c| {
                 params
+                    .get("filter")
+                    .is_none_or(|f| f != "statuscode:200" || c.status == 200)
+            })
+            .filter(|c| {
+                params
                     .get("to")
                     .is_none_or(|to| day(&c.timestamp) <= day(to))
             })
@@ -319,6 +336,12 @@ impl Respond for CdxResponder {
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         let cdx = self.cdx.lock().expect("cdx lock").clone();
+        // Without `output=json` the real API answers plain text, which a JSON client can't use.
+        if !matches!(cdx.mode, CdxMode::Unavailable)
+            && params.get("output").map(String::as_str) != Some("json")
+        {
+            return status(400).set_body_string("only output=json is supported by this mock");
+        }
         let rows = cdx.rows(&params);
         let body = if rows.is_empty() {
             "[]".to_owned()

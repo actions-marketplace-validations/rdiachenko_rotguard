@@ -169,9 +169,13 @@ async fn s39_bare_url_keeps_parens_and_shortcode_src() {
 async fn s40_skips_non_http_and_internal_destinations() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/p", page("P", "p"))).await;
+    // Same host and port as M, so only skipping `//` links keeps M from being hit.
+    let authority = w.base.strip_prefix("http:").expect("M is served over http");
     w.site.write(
         "post.md",
-        "[m](mailto:a@example.com)\n\n[r](/posts/x/)\n\n[f](#top)\n\n[p](//127.0.0.1/p)\n",
+        &format!(
+            "[m](mailto:a@example.com)\n\n[r](/posts/x/)\n\n[f](#top)\n\n[p]({authority}/p)\n"
+        ),
     );
 
     let out = w.run(&[]).await;
