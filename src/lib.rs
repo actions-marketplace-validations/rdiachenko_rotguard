@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::extract::{Link, Page};
 use crate::report::Summary;
 
+pub mod apply;
 pub mod archive;
 pub mod check;
 pub mod config;

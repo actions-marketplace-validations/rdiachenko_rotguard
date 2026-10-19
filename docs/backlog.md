@@ -34,3 +34,5 @@
 - [P2] No test covers the "probe: same final URL" signal — src/check.rs:477 — from whittle/link-health, 2026-10-19
 - [P2] No test shows the probe signals ignore a non-2xx probe (every non-2xx probe in tests has an empty body); add a 404 probe with the page's title and expect Ok — src/check.rs:473 — from whittle/link-health, 2026-10-19
 - [P2] No test covers a root URL with a not-found title (the title check runs without a probe) — src/check.rs:462 — from whittle/link-health, 2026-10-19
+- [P2] `writable` returns `Result<(), String>` matched on literals; an enum (`NotVerbatim`, `CannotQuote`) with the same Display would let `apply` and `Fix::Manual` match exhaustively — src/apply.rs:12 — from whittle/link-health, 2026-10-19
+- [P2] Url-derived fixes can break Html and MdText positions R23 doesn't cover: `'` ends a single-quoted `href='…'`, and `\`, `&entity;`, `'` or `)` in MdText change or cut off the URL when it is extracted again — src/apply.rs — from whittle/link-health, 2026-10-19
