@@ -1,0 +1,38 @@
+[gates]
+checks = [
+  "cargo fmt --check",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test",
+]
+# The design's Fitness rules: only src/apply.rs writes files; tests never hit the real network;
+# no private data in tracked files.
+fitness = [
+  '''! grep -rnE 'fs::write|File::create|fs::rename|OpenOptions' src --include='*.rs' | grep -v '^src/apply.rs:' ''',
+  '''! grep -rhoE 'https?://[A-Za-z0-9.-]+' tests | grep -vE '^https?://(127\.0\.0\.1|localhost|[A-Za-z0-9.-]+\.(invalid|test|example))$' ''',
+  "scripts/privacy-check.sh --all",
+]
+risk_paths = [
+  ".github/**",
+  ".githooks/**",
+  "scripts/**",
+  "Cargo.toml",
+  "Cargo.lock",
+  "**/*secret*",
+  ".env*",
+  ".whittle/gates.toml",
+  "src/apply.rs",
+]
+max_diff_lines = 1500
+merge = "local"
+deploy = ""
+
+[profiles.rust]
+root = "."
+match = ["**/*.rs", "**/Cargo.toml"]
+builder = "whittle:rust-builder"
+reviewer = "whittle:rust-reviewer"
+checks = [
+  "cargo fmt --check",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test",
+]
