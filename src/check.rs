@@ -9,6 +9,7 @@ use std::time::Duration;
 use reqwest::header::{LOCATION, RETRY_AFTER};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
+use serde::Serialize;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep_until};
 use url::Url;
@@ -23,7 +24,7 @@ const MAX_BODY: usize = 256 * 1024;
 const MAX_HOSTS_IN_FLIGHT: usize = 8;
 
 /// One response in a redirect chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hop {
     pub url: Url,
     pub status: u16,
@@ -239,6 +240,84 @@ fn map_err(err: reqwest::Error) -> FetchError {
         FetchError::Tls
     } else {
         FetchError::Connect
+    }
+}
+
+/// What a fetch says about a URL, before soft-404 checks and retries.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum Verdict {
+    Ok {
+        chain: Vec<Hop>,
+    },
+    /// Moved for good; `fix` is the target of the last 301/308 in the leading run.
+    Permanent {
+        chain: Vec<Hop>,
+        fix: Url,
+    },
+    Temporary {
+        chain: Vec<Hop>,
+        final_url: Url,
+    },
+    Dead {
+        reason: String,
+    },
+    Suspect {
+        chain: Vec<Hop>,
+        reason: String,
+    },
+    Unverifiable {
+        reason: String,
+    },
+}
+
+/// Classifies a fetch outcome by its status and redirect chain.
+#[must_use]
+pub fn classify(outcome: &Result<Fetched, FetchError>) -> Verdict {
+    let unverifiable = |reason: String| Verdict::Unverifiable { reason };
+    let fetched = match outcome {
+        Ok(fetched) => fetched,
+        Err(FetchError::Dns) => {
+            return Verdict::Dead {
+                reason: FetchError::Dns.to_string(),
+            };
+        }
+        Err(err) => return unverifiable(err.to_string()),
+    };
+    let chain = &fetched.chain;
+    let Some(last) = chain.last() else {
+        return unverifiable("no response".to_owned());
+    };
+    match last.status {
+        404 | 410 => Verdict::Dead {
+            reason: last.status.to_string(),
+        },
+        401 | 403 | 429 | 999 | 500..=599 => unverifiable(last.status.to_string()),
+        200..=299 => {
+            let leading = chain
+                .iter()
+                .take_while(|hop| matches!(hop.status, 301 | 308))
+                .count();
+            if leading > 0 {
+                // The run ends in a 2xx response, so a next hop exists.
+                let fix = chain[leading].url.clone();
+                Verdict::Permanent {
+                    chain: chain.clone(),
+                    fix,
+                }
+            } else if matches!(chain[0].status, 302 | 303 | 307) {
+                Verdict::Temporary {
+                    chain: chain.clone(),
+                    final_url: last.url.clone(),
+                }
+            } else if chain.len() == 1 {
+                Verdict::Ok {
+                    chain: chain.clone(),
+                }
+            } else {
+                unverifiable(format!("unexpected redirect {}", chain[0].status))
+            }
+        }
+        status => unverifiable(status.to_string()),
     }
 }
 
@@ -558,5 +637,121 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, FetchError::Connect);
+    }
+
+    fn hop(status: u16, p: &str) -> Hop {
+        Hop {
+            url: Url::parse(&format!("https://m.example/{p}")).expect("literal url"),
+            status,
+        }
+    }
+
+    fn fetched(hops: &[(u16, &str)]) -> Result<Fetched, FetchError> {
+        Ok(Fetched {
+            chain: hops.iter().map(|&(s, p)| hop(s, p)).collect(),
+            body: Vec::new(),
+            retry_after: None,
+        })
+    }
+
+    fn unverifiable(reason: &str) -> Verdict {
+        Verdict::Unverifiable {
+            reason: reason.to_owned(),
+        }
+    }
+
+    fn dead(reason: &str) -> Verdict {
+        Verdict::Dead {
+            reason: reason.to_owned(),
+        }
+    }
+
+    #[test]
+    fn classifies_outcomes() {
+        let ok = fetched(&[(200, "a")]);
+        let permanent = fetched(&[(301, "p1"), (200, "p2")]);
+        let permanent_run = fetched(&[(308, "p1"), (302, "p2"), (200, "p3")]);
+        let permanent_two = fetched(&[(301, "p1"), (308, "p2"), (200, "p3")]);
+        let temporary = fetched(&[(307, "t1"), (301, "t2"), (200, "t3")]);
+        let cases: Vec<(&str, Result<Fetched, FetchError>, Verdict)> = vec![
+            ("404", fetched(&[(404, "a")]), dead("404")),
+            ("410", fetched(&[(410, "a")]), dead("410")),
+            (
+                "301 then 404",
+                fetched(&[(301, "a"), (404, "b")]),
+                dead("404"),
+            ),
+            ("dns", Err(FetchError::Dns), dead("dns")),
+            ("401", fetched(&[(401, "a")]), unverifiable("401")),
+            ("403", fetched(&[(403, "a")]), unverifiable("403")),
+            ("429", fetched(&[(429, "a")]), unverifiable("429")),
+            ("999", fetched(&[(999, "a")]), unverifiable("999")),
+            ("503", fetched(&[(503, "a")]), unverifiable("503")),
+            ("timeout", Err(FetchError::Timeout), unverifiable("timeout")),
+            ("tls", Err(FetchError::Tls), unverifiable("tls")),
+            (
+                "connect",
+                Err(FetchError::Connect),
+                unverifiable("connection"),
+            ),
+            (
+                "permanent",
+                permanent.clone(),
+                Verdict::Permanent {
+                    chain: permanent.unwrap().chain,
+                    fix: hop(200, "p2").url,
+                },
+            ),
+            (
+                "308 then 302 fixes to the end of the leading run",
+                permanent_run.clone(),
+                Verdict::Permanent {
+                    chain: permanent_run.unwrap().chain,
+                    fix: hop(302, "p2").url,
+                },
+            ),
+            (
+                "301 then 308 fixes to the last target",
+                permanent_two.clone(),
+                Verdict::Permanent {
+                    chain: permanent_two.unwrap().chain,
+                    fix: hop(200, "p3").url,
+                },
+            ),
+            (
+                "temporary ignores later 301",
+                temporary.clone(),
+                Verdict::Temporary {
+                    chain: temporary.unwrap().chain,
+                    final_url: hop(200, "t3").url,
+                },
+            ),
+            (
+                "ok",
+                ok.clone(),
+                Verdict::Ok {
+                    chain: ok.unwrap().chain,
+                },
+            ),
+            ("405", fetched(&[(405, "a")]), unverifiable("405")),
+            (
+                "no location",
+                Err(FetchError::NoLocation(vec![hop(301, "a")])),
+                unverifiable("no location"),
+            ),
+            (
+                "loop",
+                Err(FetchError::Loop(vec![hop(301, "a")])),
+                unverifiable("redirect loop"),
+            ),
+            (
+                "too many hops",
+                Err(FetchError::TooManyHops(vec![hop(301, "a")])),
+                unverifiable("too many hops"),
+            ),
+        ];
+        for (name, outcome, expected) in cases {
+            assert_eq!(classify(&outcome), expected, "{name}");
+        }
     }
 }
