@@ -36,7 +36,6 @@ async fn s32_dry_run_changes_no_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S33"]
 async fn s33_apply_rewrites_only_fixable_spans() {
     let w = World::new().await;
     w.serve(
@@ -95,7 +94,6 @@ async fn s33_apply_rewrites_only_fixable_spans() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S34"]
 async fn s34_file_changed_during_run_is_left_alone() {
     let w = World::new().await;
     let post = w.site.path().join("post.md");
@@ -132,7 +130,6 @@ async fn s34_file_changed_during_run_is_left_alone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S35"]
 async fn s35_unquotable_snapshot_is_manual_fix() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/gone", status(404))).await;
@@ -161,7 +158,6 @@ async fn s35_unquotable_snapshot_is_manual_fix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S36"]
 async fn s36_escaped_link_is_manual_fix_and_others_still_apply() {
     let w = World::new().await;
     w.serve(
@@ -203,7 +199,6 @@ async fn s36_escaped_link_is_manual_fix_and_others_still_apply() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S45"]
 async fn s45_unbalanced_paren_target_is_manual_fix() {
     let w = World::new().await;
     w.serve(
@@ -231,7 +226,6 @@ async fn s45_unbalanced_paren_target_is_manual_fix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S42"]
 async fn s42_only_the_value_span_changes() {
     let w = World::new().await;
     w.serve(

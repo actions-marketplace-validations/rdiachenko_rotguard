@@ -36,3 +36,9 @@
 - [P2] No test covers a root URL with a not-found title (the title check runs without a probe) — src/check.rs:462 — from whittle/link-health, 2026-10-19
 - [P2] `writable` returns `Result<(), String>` matched on literals; an enum (`NotVerbatim`, `CannotQuote`) with the same Display would let `apply` and `Fix::Manual` match exhaustively — src/apply.rs:12 — from whittle/link-health, 2026-10-19
 - [P2] Url-derived fixes can break Html and MdText positions R23 doesn't cover: `'` ends a single-quoted `href='…'`, and `\`, `&entity;`, `'` or `)` in MdText change or cut off the URL when it is extracted again — src/apply.rs — from whittle/link-health, 2026-10-19
+- [P2] An apply error on one file aborts the remaining files after earlier ones were rewritten, and no report is printed; carry on, gather errors, print the report, then exit 2 — src/apply.rs:34 — from whittle/link-health, 2026-10-19
+- [P2] Apply I/O errors don't name the file (`applying fixes: Permission denied`) — src/apply.rs:55 — from whittle/link-health, 2026-10-19
+- [P2] The temp file is opened with `fs::write`, which follows a planted `post.md.rotguard.tmp` symlink and overwrites an existing file; use `create_new(true)` — src/apply.rs:99 — from whittle/link-health, 2026-10-19
+- [P2] No `sync_all` before the rename, which weakens R21's atomic write after a power loss — src/apply.rs:99 — from whittle/link-health, 2026-10-19
+- [P2] A content file edited into non-UTF-8, or deleted, during the run gives exit 2 instead of R22's "changed during run" — src/apply.rs:55 — from whittle/link-health, 2026-10-19
+- [P2] The apply unit test can't tell last-to-first from first-to-last (equal-length fixes); use a different-length fix plus CRLF and multibyte text before the spans — src/apply.rs:280 — from whittle/link-health, 2026-10-19

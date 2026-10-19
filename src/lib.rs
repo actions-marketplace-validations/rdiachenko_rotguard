@@ -86,9 +86,15 @@ pub fn run(args: Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (findings, summary) = runtime.block_on(check_pages(&pages, &cfg));
+    let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg));
     // Hung requests must not hold the process past the deadline.
     runtime.shutdown_background();
+    if args.apply
+        && let Err(err) = apply::apply(&args.site_dir, &mut findings)
+    {
+        eprintln!("rotguard: applying fixes: {err}");
+        return ExitCode::from(2);
+    }
     println!("{}", report::render(&findings, &summary));
     exit_code(&findings, args.strict)
 }

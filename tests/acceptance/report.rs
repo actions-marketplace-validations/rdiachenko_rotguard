@@ -63,7 +63,6 @@ async fn s31_entries_sorted_and_summary_counts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S37"]
 async fn s37_exit_codes() {
     let w = World::new().await;
     w.serve(mixed_routes(&w)).await;
