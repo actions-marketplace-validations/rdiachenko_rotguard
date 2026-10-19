@@ -1,11 +1,15 @@
 //! Extraction of links and the page date from a content file's text.
 //!
-//! This task covers front matter only; the body is ignored.
+//! Front matter values and markdown body links (inline links and images, reference
+//! definitions, autolinks and `href`/`src` in raw HTML) are covered.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use chrono::NaiveDate;
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
+use regex::Regex;
 use url::Url;
 
 use crate::config::Config;
@@ -60,7 +64,7 @@ struct Token {
     quote: Quote,
 }
 
-/// Extracts the front-matter links and the page date from `text`.
+/// Extracts the links and the page date from `text`.
 #[must_use]
 pub fn extract(path: &Path, text: &str, cfg: &Config) -> Page {
     let mut page = Page {
@@ -68,13 +72,47 @@ pub fn extract(path: &Path, text: &str, cfg: &Config) -> Page {
         date: None,
         links: Vec::new(),
     };
-    let Some((format, block)) = front_matter(text) else {
-        return page;
-    };
+    let lines = Lines::new(text);
+    let mut body_start = 0;
+    if let Some((format, block)) = front_matter(text) {
+        // The body starts after the line holding the closing delimiter.
+        body_start = text[block.end..]
+            .find('\n')
+            .map_or(text.len(), |n| block.end + n + 1);
+        front_matter_links(&mut page, text, &lines, cfg, format, &block);
+    }
+    body_links(&mut page, text, &lines, body_start);
+    page.links.sort_by_key(|l| l.span.start);
+    page
+}
+
+/// Byte offsets of every newline in a file, for turning offsets into line numbers.
+struct Lines(Vec<usize>);
+
+impl Lines {
+    fn new(text: &str) -> Self {
+        Self(text.match_indices('\n').map(|(i, _)| i).collect())
+    }
+
+    /// 1-based line of the byte `offset`.
+    fn line_of(&self, offset: usize) -> u32 {
+        let line = self.0.partition_point(|&n| n < offset) + 1;
+        u32::try_from(line).unwrap_or(u32::MAX)
+    }
+}
+
+fn front_matter_links(
+    page: &mut Page,
+    text: &str,
+    lines: &Lines,
+    cfg: &Config,
+    format: Format,
+    block: &Range<usize>,
+) {
     let block_text = &text[block.clone()];
     let Some(values) = parse_values(format, block_text, &cfg.date_key) else {
         // Unparseable front matter yields no links and no date; the body is unaffected.
-        return page;
+        return;
     };
     page.date = values.date;
 
@@ -89,8 +127,13 @@ pub fn extract(path: &Path, text: &str, cfg: &Config) -> Page {
         if let Some(i) = remaining.iter().position(|url| url == content) {
             remaining.swap_remove(i);
             let span = block.start + token.content.start..block.start + token.content.end;
-            page.links
-                .push(link(text, content, span, token.quote, true));
+            page.links.push(link(
+                lines,
+                content,
+                span,
+                Ctx::FrontMatter { quote: token.quote },
+                true,
+            ));
         } else {
             unmatched.push(token);
         }
@@ -107,29 +150,231 @@ pub fn extract(path: &Path, text: &str, cfg: &Config) -> Page {
         if let Some(i) = remaining.iter().position(|url| *url == decoded) {
             remaining.swap_remove(i);
             let span = block.start + token.content.start..block.start + token.content.end;
-            page.links
-                .push(link(text, &decoded, span, token.quote, false));
+            page.links.push(link(
+                lines,
+                &decoded,
+                span,
+                Ctx::FrontMatter { quote: token.quote },
+                false,
+            ));
         }
     }
     // Values still left were written in a form the lexer does not follow; they are
     // checked but never applied.
     for url in remaining {
-        page.links
-            .push(link(text, &url, block.clone(), Quote::Double, false));
+        page.links.push(link(
+            lines,
+            &url,
+            block.clone(),
+            Ctx::FrontMatter {
+                quote: Quote::Double,
+            },
+            false,
+        ));
     }
-    page.links.sort_by_key(|l| l.span.start);
-    page
 }
 
-fn link(text: &str, url: &str, span: Range<usize>, quote: Quote, verbatim: bool) -> Link {
-    let line = text[..span.start].bytes().filter(|&b| b == b'\n').count() + 1;
+fn link(lines: &Lines, url: &str, span: Range<usize>, ctx: Ctx, verbatim: bool) -> Link {
     Link {
         url: url.to_owned(),
-        line: u32::try_from(line).unwrap_or(u32::MAX),
+        line: lines.line_of(span.start),
         span,
-        ctx: Ctx::FrontMatter { quote },
+        ctx,
         verbatim,
     }
+}
+
+static HTML_ATTR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).expect("regex is a literal")
+});
+
+/// An open inline link, image or autolink while its events are consumed.
+struct OpenLink {
+    range: Range<usize>,
+    link_type: LinkType,
+    dest: String,
+    /// End of the link text so far; an inline destination is searched for after it.
+    text_end: usize,
+}
+
+/// Extracts the links of the markdown body that starts at `body_start`. The body is parsed
+/// alone, so front matter never reaches the markdown parser.
+fn body_links(page: &mut Page, text: &str, lines: &Lines, body_start: usize) {
+    let body = &text[body_start..];
+    let mut parser = Parser::new_ext(body, Options::empty()).into_offset_iter();
+    let mut open: Vec<OpenLink> = Vec::new();
+    for (event, range) in parser.by_ref() {
+        let range = body_start + range.start..body_start + range.end;
+        match event {
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            })
+            | Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                ..
+            }) => {
+                open.push(OpenLink {
+                    text_end: range.start + 1,
+                    range,
+                    link_type,
+                    dest: dest_url.into_string(),
+                });
+                continue;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) => {
+                if let Some(done) = open.pop() {
+                    push_dest(page, text, lines, &done);
+                }
+            }
+            Event::Html(_) | Event::InlineHtml(_) => {
+                for caps in HTML_ATTR.captures_iter(&text[range.clone()]) {
+                    let Some(value) = caps.get(1).or_else(|| caps.get(2)) else {
+                        continue;
+                    };
+                    let raw = value.as_str();
+                    let decoded = decode_entities(raw);
+                    if keep(&decoded) {
+                        let span = range.start + value.start()..range.start + value.end();
+                        // Character references mean the raw bytes are not the URL.
+                        page.links
+                            .push(link(lines, &decoded, span, Ctx::Html, decoded == raw));
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(parent) = open.last_mut() {
+            parent.text_end = range.end;
+        }
+    }
+    // Reference definitions count once each, whether or not they are used.
+    for (_, def) in parser.reference_definitions().iter() {
+        if !keep(&def.dest) {
+            continue;
+        }
+        let span = body_start + def.span.start..body_start + def.span.end;
+        // The destination follows the label's `]:`.
+        let from = text[span.clone()].find("]:").map_or(0, |n| n + 2);
+        page.links
+            .push(dest_link(text, lines, &def.dest, span, from));
+    }
+}
+
+/// Records the destination of a finished inline link, image or autolink.
+fn push_dest(page: &mut Page, text: &str, lines: &Lines, done: &OpenLink) {
+    if !keep(&done.dest) {
+        return;
+    }
+    let from = match done.link_type {
+        // The destination follows the `](` after the link text.
+        LinkType::Inline => text[done.text_end..done.range.end]
+            .find("](")
+            .map_or(done.range.len(), |n| {
+                done.text_end - done.range.start + n + 2
+            }),
+        LinkType::Autolink => 0,
+        // Reference-style uses are skipped: their definition already counts.
+        _ => return,
+    };
+    page.links
+        .push(dest_link(text, lines, &done.dest, done.range.clone(), from));
+}
+
+/// Builds an `MdDest` link for `dest`. The raw destination token is read from `range` at
+/// `from`; it is verbatim only when it equals `dest`, otherwise the whole `range` stands in
+/// for the span.
+fn dest_link(text: &str, lines: &Lines, dest: &str, range: Range<usize>, from: usize) -> Link {
+    let base = range.start + from;
+    let raw = text[range.clone()]
+        .get(from..)
+        .and_then(raw_destination)
+        .filter(|raw| &text[base + raw.start..base + raw.end] == dest);
+    match raw {
+        Some(raw) => {
+            let start = base + raw.start;
+            link(lines, dest, start..start + dest.len(), Ctx::MdDest, true)
+        }
+        None => link(lines, dest, range, Ctx::MdDest, false),
+    }
+}
+
+/// The range of the raw destination token at the start of `s` (after optional whitespace):
+/// the content of `<…>`, or the run up to whitespace or the unbalanced closing `)`.
+fn raw_destination(s: &str) -> Option<Range<usize>> {
+    let bytes = s.as_bytes();
+    let start = s.len() - s.trim_start().len();
+    if bytes.get(start) == Some(&b'<') {
+        let mut i = start + 1;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 1,
+                b'>' => return Some(start + 1..i),
+                b'\n' | b'<' => return None,
+                _ => {}
+            }
+            i += 1;
+        }
+        return None;
+    }
+    let mut depth = 0_usize;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'(' => depth += 1,
+            b')' if depth == 0 => break,
+            b')' => depth -= 1,
+            b if b.is_ascii_whitespace() => break,
+            _ => {}
+        }
+        i += 1;
+    }
+    Some(start..i.min(bytes.len()))
+}
+
+/// Decodes the HTML character references `&amp; &lt; &gt; &quot; &#39; &apos;` and numeric
+/// `&#NN;` / `&#xHH;`; anything else stays as written.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest.find(';').filter(|&end| end <= 10).and_then(|end| {
+            let name = &rest[1..end];
+            let ch = match name {
+                "amp" => '&',
+                "lt" => '<',
+                "gt" => '>',
+                "quot" => '"',
+                "apos" => '\'',
+                _ => {
+                    let num = name.strip_prefix('#')?;
+                    let code = match num.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => num.parse().ok()?,
+                    };
+                    char::from_u32(code).filter(|&c| c != '\0')?
+                }
+            };
+            Some((ch, end + 1))
+        });
+        match decoded {
+            Some((ch, len)) => {
+                out.push(ch);
+                rest = &rest[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Finds the leading front-matter block: its format and the byte range between delimiters.
@@ -663,5 +908,154 @@ mod tests {
         assert_eq!(page.date, NaiveDate::from_ymd_opt(2024, 1, 2));
         assert_eq!(page.links.len(), 1);
         assert_slices(text, &page);
+    }
+
+    fn body(text: &str) -> Vec<(String, u32, Ctx, bool)> {
+        let page = run(text);
+        assert_slices(text, &page);
+        page.links
+            .iter()
+            .map(|l| (l.url.clone(), l.line, l.ctx, l.verbatim))
+            .collect()
+    }
+
+    #[test]
+    fn body_link_kinds_have_url_line_and_absolute_span() {
+        let text = "---\ntitle: T\n---\nintro [a](https://a.test/x \"t https://a.test/x\") and\n![i](<https://b.test/img>)\n\nauto <https://c.test/z>\n\n<a href=\"https://d.test/h\">h</a> <img src='https://e.test/s'>\n\n<div>\n<a HREF = \"https://f.test/b\">b</a>\n</div>\n";
+        let page = run(text);
+        assert_slices(text, &page);
+        let got: Vec<_> = page
+            .links
+            .iter()
+            .map(|l| (l.url.as_str(), l.line, l.ctx, &text[l.span.clone()]))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("https://a.test/x", 4, Ctx::MdDest, "https://a.test/x"),
+                ("https://b.test/img", 5, Ctx::MdDest, "https://b.test/img"),
+                ("https://c.test/z", 7, Ctx::MdDest, "https://c.test/z"),
+                ("https://d.test/h", 9, Ctx::Html, "https://d.test/h"),
+                ("https://e.test/s", 9, Ctx::Html, "https://e.test/s"),
+                ("https://f.test/b", 12, Ctx::Html, "https://f.test/b"),
+            ]
+        );
+        // The span is file-absolute: the first one is the destination, not the title.
+        assert_eq!(page.links[0].span.start, text.find("](").unwrap() + 2);
+    }
+
+    #[test]
+    fn nested_image_in_link_gives_both_destinations() {
+        let text = "[![i](https://a.test/i)](https://a.test/l)\n";
+        let page = run(text);
+        assert_slices(text, &page);
+        let spans: Vec<_> = page.links.iter().map(|l| l.span.start).collect();
+        assert_eq!(
+            spans,
+            [
+                text.find("https://a.test/i").unwrap(),
+                text.find("https://a.test/l").unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn code_yields_nothing() {
+        let text = "```\n[a](https://a.test/1)\n<a href=\"https://a.test/2\">\n```\n\n    [b](https://a.test/3)\n    <https://a.test/4>\n\n~~~html\n<a href=\"https://a.test/5\">\n~~~\n\n`[c](https://a.test/6)` and ``<https://a.test/7>``\n";
+        assert_eq!(body(text), []);
+    }
+
+    #[test]
+    fn escaped_destination_is_not_verbatim() {
+        let text = "pre\n\n[x](https://m.test/a\\_b)\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        let l = &page.links[0];
+        assert_eq!(l.url, "https://m.test/a_b");
+        assert!(!l.verbatim);
+        assert_eq!(l.line, 3);
+        assert_eq!(&text[l.span.clone()], "[x](https://m.test/a\\_b)");
+    }
+
+    #[test]
+    fn reference_definitions_count_once_used_or_not() {
+        let text = "see [one][a] and [one][a] and [a]\n\n[a]: https://a.test/used \"T\"\n[b]: <https://b.test/unused>\n";
+        let got = body(text);
+        assert_eq!(
+            got,
+            [
+                ("https://a.test/used".to_owned(), 3, Ctx::MdDest, true),
+                ("https://b.test/unused".to_owned(), 4, Ctx::MdDest, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn plain_inline_destination_with_title_stays_verbatim() {
+        let text = "pre [x](https://m.test/a \"title\")\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        assert!(page.links[0].verbatim);
+        assert_eq!(&text[page.links[0].span.clone()], "https://m.test/a");
+    }
+
+    #[test]
+    fn escaped_destinations_fall_back_to_the_event_range() {
+        for (text, url, whole) in [
+            (
+                "[x](https://m.test/a&amp;)\n",
+                "https://m.test/a&",
+                "[x](https://m.test/a&amp;)",
+            ),
+            (
+                "[x](https://m.test/a\\\\)\n",
+                "https://m.test/a\\",
+                "[x](https://m.test/a\\\\)",
+            ),
+            (
+                "[x](https://m.test/a\\_b \"https://m.test/a_b\")\n",
+                "https://m.test/a_b",
+                "[x](https://m.test/a\\_b \"https://m.test/a_b\")",
+            ),
+            (
+                "[r]: https://m.test/a\\_b \"https://m.test/a_b\"\n",
+                "https://m.test/a_b",
+                "[r]: https://m.test/a\\_b \"https://m.test/a_b\"",
+            ),
+        ] {
+            let page = run(text);
+            assert_eq!(page.links.len(), 1, "{text}");
+            let l = &page.links[0];
+            assert_eq!(l.url, url, "{text}");
+            assert!(!l.verbatim, "{text}");
+            assert_eq!(text[l.span.clone()].trim_end(), whole, "{text}");
+        }
+    }
+
+    #[test]
+    fn html_attribute_entities_are_decoded_and_not_verbatim() {
+        let text = "<a href=\"https://h.test/?a=1&amp;b=2&#x26;c=&#51;\">x</a>\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        let l = &page.links[0];
+        assert_eq!(l.url, "https://h.test/?a=1&b=2&c=3");
+        assert!(!l.verbatim);
+        assert_eq!(
+            &text[l.span.clone()],
+            "https://h.test/?a=1&amp;b=2&#x26;c=&#51;"
+        );
+    }
+
+    #[test]
+    fn non_http_destinations_yield_nothing() {
+        let text = "[a](mailto:someone) [b](rel/path) [c](#frag) [d](//h.test/x) <a href=\"/rel\">\n\n[e]: mailto:someone\n[f]: ../up\n";
+        assert_eq!(body(text), []);
+    }
+
+    #[test]
+    fn front_matter_is_not_parsed_as_markdown() {
+        let text = "---\nu: https://a.test/x\nmd: \"[a](https://b.test/y)\"\n---\nbody\n";
+        let urls: Vec<_> = run(text).links.into_iter().map(|l| l.url).collect();
+        assert_eq!(urls, ["https://a.test/x"]);
     }
 }
