@@ -26,3 +26,6 @@
 - [P2] A panicked archive lookup is reported as "manual fix: deadline", hiding the bug behind an R15 reason — src/lib.rs:262 — from whittle/link-health, 2026-10-19
 - [P2] lib.rs has no unit tests for paths no scenario covers: a permanent target's own fragment kept, an ignored URL counted once across fragments, an unreadable content file giving exit 2 — src/lib.rs — from whittle/link-health, 2026-10-19
 - [P2] Bare-URL trimming can split a trailing backslash escape (`see https://m.test/a\_` gives verbatim `…/a\`); never trim a character escaped by `\`, or trim the `\` with it — src/extract.rs:396 — from whittle/link-health, 2026-10-19
+- [P2] Redirect-to-root is checked only when the chain ends in 2xx; the design puts it before the catch-all, so `/deep` → 301 → `/` → 400 is Unverifiable instead of Suspect — src/check.rs:300 — from whittle/link-health, 2026-10-19
+- [P2] Any hop through `/` makes a URL Suspect, even when the chain ends on a real page (`/archives/123` → `/?p=123` → `/2020/post/`), losing a Permanent fix; R10 is ambiguous; consider testing only the final URL — src/check.rs:303 — from whittle/link-health, 2026-10-19
+- [P2] No `check_all` test proves the `[hosts]` lookup is used (a lookup that always returned the default would pass until S21) — src/check.rs:353 — from whittle/link-health, 2026-10-19

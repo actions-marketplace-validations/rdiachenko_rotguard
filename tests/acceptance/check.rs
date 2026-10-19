@@ -247,7 +247,6 @@ async fn s14_temporary_redirect_reports_final_url() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S15"]
 async fn s15_redirect_to_root_is_suspect_not_permanent() {
     let w = World::new().await;
     w.serve(
@@ -280,7 +279,6 @@ async fn s15_redirect_to_root_is_suspect_not_permanent() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S43"]
 async fn s43_temporary_redirect_to_root_is_suspect() {
     let w = World::new().await;
     w.serve(

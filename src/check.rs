@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep, sleep_until, timeout_at};
 use url::Url;
 
-use crate::config::Config;
+use crate::config::{Config, HostConfig};
 
 /// Most redirects followed before giving up.
 const MAX_REDIRECTS: usize = 10;
@@ -273,8 +273,11 @@ pub enum Verdict {
 }
 
 /// Classifies a fetch outcome by its status and redirect chain.
+///
+/// A non-root URL that redirects to the site root is a soft-404 suspect unless `host` turns
+/// soft-404 detection off.
 #[must_use]
-pub fn classify(outcome: &Result<Fetched, FetchError>) -> Verdict {
+pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Verdict {
     let unverifiable = |reason: String| Verdict::Unverifiable { reason };
     let fetched = match outcome {
         Ok(fetched) => fetched,
@@ -295,6 +298,15 @@ pub fn classify(outcome: &Result<Fetched, FetchError>) -> Verdict {
         },
         401 | 403 | 429 | 999 | 500..=599 => unverifiable(last.status.to_string()),
         200..=299 => {
+            if host.soft404
+                && chain[0].url.path() != "/"
+                && chain[1..].iter().any(|hop| hop.url.path() == "/")
+            {
+                return Verdict::Suspect {
+                    chain: chain.clone(),
+                    reason: "redirect to root".to_owned(),
+                };
+            }
             let leading = chain
                 .iter()
                 .take_while(|hop| matches!(hop.status, 301 | 308))
@@ -338,8 +350,13 @@ pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashM
     let mut tasks = JoinSet::new();
     for url in urls {
         let fetcher = Arc::clone(&fetcher);
+        let host = url
+            .host_str()
+            .and_then(|name| cfg.hosts.get(name))
+            .cloned()
+            .unwrap_or_default();
         tasks.spawn(async move {
-            let verdict = timeout_at(deadline, check_one(&fetcher, &url, recheck_delay))
+            let verdict = timeout_at(deadline, check_one(&fetcher, &url, &host, recheck_delay))
                 .await
                 .unwrap_or_else(|_| Verdict::Unverifiable {
                     reason: "deadline".to_owned(),
@@ -357,13 +374,18 @@ pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashM
 }
 
 /// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`.
-async fn check_one(fetcher: &Fetcher, url: &Url, recheck_delay: Duration) -> Verdict {
-    let first = classify(&fetch_with_retries(fetcher, url).await);
+async fn check_one(
+    fetcher: &Fetcher,
+    url: &Url,
+    host: &HostConfig,
+    recheck_delay: Duration,
+) -> Verdict {
+    let first = classify(&fetch_with_retries(fetcher, url).await, host);
     if !matches!(first, Verdict::Dead { .. }) {
         return first;
     }
     sleep(recheck_delay).await;
-    classify(&fetch_with_retries(fetcher, url).await)
+    classify(&fetch_with_retries(fetcher, url).await, host)
 }
 
 /// What to do after an outcome.
@@ -831,8 +853,85 @@ mod tests {
             ),
         ];
         for (name, outcome, expected) in cases {
-            assert_eq!(classify(&outcome), expected, "{name}");
+            assert_eq!(
+                classify(&outcome, &HostConfig::default()),
+                expected,
+                "{name}"
+            );
         }
+    }
+
+    fn root_hop(status: u16) -> Hop {
+        Hop {
+            url: Url::parse("https://site.example/").unwrap(),
+            status,
+        }
+    }
+
+    fn deep_hop(status: u16) -> Hop {
+        Hop {
+            url: Url::parse("https://site.example/deep/page").unwrap(),
+            status,
+        }
+    }
+
+    fn chain_of(hops: Vec<Hop>) -> Result<Fetched, FetchError> {
+        let mut fetched = fetched(&[(200, "x")]).unwrap();
+        fetched.chain = hops;
+        Ok(fetched)
+    }
+
+    fn suspect(chain: &Result<Fetched, FetchError>) -> Verdict {
+        Verdict::Suspect {
+            chain: chain.as_ref().unwrap().chain.clone(),
+            reason: "redirect to root".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_301_to_the_root_is_suspect() {
+        let outcome = chain_of(vec![deep_hop(301), root_hop(200)]);
+        assert_eq!(
+            classify(&outcome, &HostConfig::default()),
+            suspect(&outcome)
+        );
+    }
+
+    #[test]
+    fn a_302_to_the_root_is_suspect_not_temporary() {
+        let outcome = chain_of(vec![deep_hop(302), root_hop(200)]);
+        assert_eq!(
+            classify(&outcome, &HostConfig::default()),
+            suspect(&outcome)
+        );
+    }
+
+    #[test]
+    fn a_redirect_to_the_root_is_permanent_when_soft404_is_off() {
+        let outcome = chain_of(vec![deep_hop(301), root_hop(200)]);
+        let off = HostConfig { soft404: false };
+        assert_eq!(
+            classify(&outcome, &off),
+            Verdict::Permanent {
+                chain: outcome.as_ref().unwrap().chain.clone(),
+                fix: root_hop(200).url,
+            }
+        );
+    }
+
+    #[test]
+    fn a_root_url_redirected_to_the_root_is_unaffected() {
+        let outcome = chain_of(vec![root_hop(301), root_hop(200)]);
+        assert!(matches!(
+            classify(&outcome, &HostConfig::default()),
+            Verdict::Permanent { .. }
+        ));
+    }
+
+    #[test]
+    fn a_redirect_to_the_root_that_ends_in_404_stays_dead() {
+        let outcome = chain_of(vec![deep_hop(301), root_hop(404)]);
+        assert_eq!(classify(&outcome, &HostConfig::default()), dead("404"));
     }
 
     fn config_for(extra: &str) -> Config {

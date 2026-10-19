@@ -17,7 +17,6 @@ fn mixed_routes(w: &World) -> Routes {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S31"]
 async fn s31_entries_sorted_and_summary_counts() {
     let w = World::new().await;
     // `a.md:2` sorts first but finishes last: its host is slow to answer. `localhost` is
