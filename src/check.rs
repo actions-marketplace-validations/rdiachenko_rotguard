@@ -1,17 +1,19 @@
 //! Fetching URLs politely (one request in flight per host, spaced starts, bounded hosts),
 //! classifying the outcome, and checking many URLs with retries under a deadline.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::hash::{BuildHasher, Hasher, RandomState};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use regex::Regex;
 use reqwest::header::{LOCATION, RETRY_AFTER};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
 use serde::Serialize;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep, sleep_until, timeout_at};
 use url::Url;
@@ -346,21 +348,25 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 /// every URL still unfinished at `deadline` the verdict `Unverifiable("deadline")`.
 pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashMap<Url, Verdict> {
     let fetcher = Arc::new(Fetcher::new(cfg));
+    let probes = Arc::new(Probes::default());
     let recheck_delay = cfg.recheck_delay;
     let mut tasks = JoinSet::new();
     for url in urls {
         let fetcher = Arc::clone(&fetcher);
+        let probes = Arc::clone(&probes);
         let host = url
             .host_str()
             .and_then(|name| cfg.hosts.get(name))
             .cloned()
             .unwrap_or_default();
         tasks.spawn(async move {
-            let verdict = timeout_at(deadline, check_one(&fetcher, &url, &host, recheck_delay))
-                .await
-                .unwrap_or_else(|_| Verdict::Unverifiable {
-                    reason: "deadline".to_owned(),
-                });
+            let check = check_one(&fetcher, &probes, &url, &host, recheck_delay);
+            let verdict =
+                timeout_at(deadline, check)
+                    .await
+                    .unwrap_or_else(|_| Verdict::Unverifiable {
+                        reason: "deadline".to_owned(),
+                    });
             (url, verdict)
         });
     }
@@ -373,19 +379,180 @@ pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashM
     verdicts
 }
 
-/// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`.
+/// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`; a 2xx
+/// that passes classification is probed for soft-404 behaviour.
 async fn check_one(
     fetcher: &Fetcher,
+    probes: &Probes,
     url: &Url,
     host: &HostConfig,
     recheck_delay: Duration,
 ) -> Verdict {
-    let first = classify(&fetch_with_retries(fetcher, url).await, host);
-    if !matches!(first, Verdict::Dead { .. }) {
-        return first;
+    let mut outcome = fetch_with_retries(fetcher, url).await;
+    if matches!(classify(&outcome, host), Verdict::Dead { .. }) {
+        sleep(recheck_delay).await;
+        outcome = fetch_with_retries(fetcher, url).await;
     }
-    sleep(recheck_delay).await;
-    classify(&fetch_with_retries(fetcher, url).await, host)
+    let verdict = classify(&outcome, host);
+    let (Ok(fetched), true) = (
+        &outcome,
+        host.soft404
+            && url.path() != "/"
+            && matches!(
+                verdict,
+                Verdict::Ok { .. } | Verdict::Permanent { .. } | Verdict::Temporary { .. }
+            ),
+    ) else {
+        return verdict;
+    };
+    match probes.reason(fetcher, url, fetched).await {
+        Some(reason) => Verdict::Suspect {
+            chain: fetched.chain.clone(),
+            reason: reason.to_owned(),
+        },
+        None => verdict,
+    }
+}
+
+/// Length of a probe's random last path segment.
+const PROBE_TOKEN_LEN: usize = 24;
+/// Shingle similarity from which two bodies count as the same page.
+const SIMILAR_BODY: f64 = 0.9;
+
+/// What a probe URL returned, kept for comparing with every page under the same parent path.
+#[derive(Debug)]
+struct Probe {
+    final_url: Url,
+    title: String,
+    shingles: HashSet<String>,
+}
+
+/// Probes by (origin, parent path); each cell is filled by the first check that needs it.
+type ProbeCache = HashMap<(String, String), Arc<OnceCell<Option<Probe>>>>;
+
+/// Probe results shared by all checks, one fetch per (origin, parent path).
+#[derive(Debug, Default)]
+struct Probes {
+    cache: StdMutex<ProbeCache>,
+}
+
+impl Probes {
+    /// Why `url`, which ended in `fetched`, looks like a soft 404, if the probe says so.
+    async fn reason(
+        &self,
+        fetcher: &Fetcher,
+        url: &Url,
+        fetched: &Fetched,
+    ) -> Option<&'static str> {
+        let parent = url.path().rsplit_once('/').map_or("/", |(dir, _)| dir);
+        let cell = {
+            let mut cache = self.cache.lock().expect("no code panics holding this lock");
+            let key = (url.origin().ascii_serialization(), parent.to_owned());
+            Arc::clone(cache.entry(key).or_default())
+        };
+        let probe = cell
+            .get_or_init(|| async {
+                let mut target = url.clone();
+                target.set_path(&format!("{parent}/{}", random_token()));
+                target.set_query(None);
+                target.set_fragment(None);
+                // A failed or non-2xx probe is no evidence, not a finding.
+                let probed = fetcher.fetch(&target).await.ok()?;
+                let last = probed.chain.last()?;
+                if !(200..300).contains(&last.status) {
+                    return None;
+                }
+                let text = String::from_utf8_lossy(&probed.body);
+                Some(Probe {
+                    final_url: last.url.clone(),
+                    title: title_of(&text),
+                    shingles: shingles(&text),
+                })
+            })
+            .await
+            .as_ref()?;
+        let last = fetched.chain.last()?;
+        let text = String::from_utf8_lossy(&fetched.body);
+        let title = title_of(&text);
+        if last.url == probe.final_url {
+            Some("probe: same final URL")
+        } else if !title.is_empty() && title == probe.title {
+            Some("probe: same title")
+        } else if jaccard(&shingles(&text), &probe.shingles) >= SIMILAR_BODY {
+            Some("probe: similar body")
+        } else {
+            None
+        }
+    }
+}
+
+/// A random `[a-z0-9]` token built from std's randomly keyed hasher.
+fn random_token() -> String {
+    const ALPHABET: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    (0..PROBE_TOKEN_LEN)
+        .map(|i| {
+            let mut hasher = RandomState::new().build_hasher();
+            hasher.write_usize(i);
+            hasher.write_u128(nanos);
+            let index = usize::try_from(hasher.finish() % 36).expect("below 36");
+            char::from(ALPHABET[index])
+        })
+        .collect()
+}
+
+static TITLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").expect("regex is a literal"));
+static HIDDEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<!--.*?-->|<script\b.*?</script>|<style\b.*?</style>")
+        .expect("regex is a literal")
+});
+static TAG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<[^>]*>").expect("regex is a literal"));
+
+fn decode_entities(text: &str) -> String {
+    text.replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
+/// The page's `<title>`, trimmed with inner whitespace collapsed; empty when it has none.
+fn title_of(html: &str) -> String {
+    TITLE.captures(html).map_or_else(String::new, |caps| {
+        decode_entities(&caps[1])
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
+}
+
+/// The set of 3-word shingles of the page's visible, lowercased text.
+fn shingles(html: &str) -> HashSet<String> {
+    let visible = HIDDEN.replace_all(html, " ");
+    let visible = TAG.replace_all(&visible, " ");
+    let visible = decode_entities(&visible).to_lowercase();
+    let words: Vec<&str> = visible
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    words.windows(3).map(|w| w.join(" ")).collect()
+}
+
+/// Jaccard similarity of two sets; 0 when both are empty, so empty pages never match.
+fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+    let union = a.union(b).count();
+    if union == 0 {
+        return 0.0;
+    }
+    // Set sizes are far below f64's exact integer range.
+    #[expect(clippy::cast_precision_loss, reason = "counts are far below 2^52")]
+    let ratio = a.intersection(b).count() as f64 / union as f64;
+    ratio
 }
 
 /// What to do after an outcome.
@@ -427,7 +594,7 @@ async fn fetch_with_retries(fetcher: &Fetcher, url: &Url) -> Result<Fetched, Fet
 mod tests {
     use super::*;
     use crate::config;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, path_regex};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     fn fetcher(extra: &str) -> Fetcher {
@@ -941,6 +1108,9 @@ mod tests {
         .expect("test config is valid")
     }
 
+    /// Keeps a scripted server from spending replies on soft-404 probes.
+    const NO_PROBE: &str = "[hosts.\"127.0.0.1\"]\nsoft404 = false";
+
     fn far() -> Instant {
         Instant::now() + Duration::from_secs(60)
     }
@@ -1018,7 +1188,7 @@ mod tests {
         ])
         .await;
         let u = url(&server, "/x");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        let got = check_all(vec![u.clone()], &config_for(NO_PROBE), far()).await;
         assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
         let times = times.lock().unwrap();
         assert_eq!(times.len(), 2);
@@ -1043,7 +1213,12 @@ mod tests {
         let (server, times) =
             scripted(vec![ResponseTemplate::new(404), ResponseTemplate::new(200)]).await;
         let u = url(&server, "/x");
-        let got = check_all(vec![u.clone()], &config_for("recheck_delay_ms = 50"), far()).await;
+        let got = check_all(
+            vec![u.clone()],
+            &config_for(&format!("recheck_delay_ms = 50\n{NO_PROBE}")),
+            far(),
+        )
+        .await;
         assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
         assert_eq!(times.lock().unwrap().len(), 2);
     }
@@ -1104,5 +1279,132 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert!(matches!(got[&a], Verdict::Ok { .. }));
         assert_eq!(unverifiable_reason(&got, &b), "403");
+    }
+
+    fn page(title: &str, body: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_string(format!(
+            "<html><head><title>{title}</title></head><body>{body}</body></html>"
+        ))
+    }
+
+    async fn mount(server: &MockServer, route: &str, response: ResponseTemplate) {
+        Mock::given(path_regex(route))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    fn reason_of(verdict: &Verdict) -> &str {
+        match verdict {
+            Verdict::Suspect { reason, .. } => reason,
+            other => panic!("expected suspect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn identical_text_has_similarity_one_and_unrelated_text_less_than_point_nine() {
+        let a = shingles("<p>the quick brown fox jumps over the lazy dog</p>");
+        assert!((jaccard(&a, &a) - 1.0).abs() < f64::EPSILON);
+        let b = shingles("<p>pack my box with five dozen liquor jugs today</p>");
+        assert!(jaccard(&a, &b) < 0.9);
+        assert!(jaccard(&HashSet::new(), &HashSet::new()) < f64::EPSILON);
+    }
+
+    #[test]
+    fn visible_text_skips_scripts_styles_and_tags() {
+        let html = "<style>a b c d</style><script>e f g h</script><p>One &amp;&nbsp;Two, three</p>";
+        let got = shingles(html);
+        let expected: HashSet<String> = ["one two three"].map(String::from).into();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn title_is_extracted_trimmed_and_collapsed() {
+        assert_eq!(
+            title_of("<HEAD><Title lang=en>\n  Docs \t home \n</TITLE>"),
+            "Docs home"
+        );
+        assert_eq!(title_of("<p>no title</p>"), "");
+    }
+
+    #[test]
+    fn tokens_are_24_lowercase_alphanumerics_and_differ() {
+        let (a, b) = (random_token(), random_token());
+        let ok = |t: &str| {
+            t.len() == 24
+                && t.bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        };
+        assert!(ok(&a) && ok(&b), "{a} {b}");
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn two_urls_under_one_path_share_one_probe_that_404s() {
+        let server = MockServer::start().await;
+        mount(&server, "^/docs/(a|b)$", page("T", "some page text here")).await;
+        let (a, b) = (url(&server, "/docs/a"), url(&server, "/docs/b"));
+        let got = check_all(vec![a.clone(), b.clone()], &config_for(""), far()).await;
+        assert!(matches!(got[&a], Verdict::Ok { .. }), "{:?}", got[&a]);
+        assert!(matches!(got[&b], Verdict::Ok { .. }), "{:?}", got[&b]);
+        let probes: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| !matches!(r.url.path(), "/docs/a" | "/docs/b"))
+            .collect();
+        assert_eq!(probes.len(), 1, "{probes:?}");
+        let token = probes[0]
+            .url
+            .path()
+            .strip_prefix("/docs/")
+            .unwrap()
+            .to_owned();
+        assert_eq!(token.len(), 24);
+    }
+
+    #[tokio::test]
+    async fn a_probe_with_the_same_title_is_suspect() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "^/docs/real$",
+            page("Docs home", "alpha beta gamma delta"),
+        )
+        .await;
+        mount(
+            &server,
+            "^/docs/[a-z0-9]{24}$",
+            page("Docs home", "one two three four five"),
+        )
+        .await;
+        let u = url(&server, "/docs/real");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(reason_of(&got[&u]), "probe: same title");
+    }
+
+    #[tokio::test]
+    async fn a_similar_body_with_another_title_is_suspect() {
+        let server = MockServer::start().await;
+        let body: Vec<String> = (0..400).map(|i| format!("word{i}")).collect();
+        let body = body.join(" ");
+        mount(&server, "^/x/a$", page("Real", &body)).await;
+        mount(&server, "^/x/[a-z0-9]{24}$", page("Other", &body)).await;
+        let u = url(&server, "/x/a");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(reason_of(&got[&u]), "probe: similar body");
+    }
+
+    #[tokio::test]
+    async fn soft404_off_sends_no_probe() {
+        let server = MockServer::start().await;
+        mount(&server, "^/docs/real$", page("Docs home", "alpha")).await;
+        mount(&server, "^/docs/[a-z0-9]{24}$", page("Docs home", "alpha")).await;
+        let u = url(&server, "/docs/real");
+        let cfg = config_for("[hosts.\"127.0.0.1\"]\nsoft404 = false");
+        let got = check_all(vec![u.clone()], &cfg, far()).await;
+        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
+        assert_eq!(gets(&server).await, 1);
     }
 }

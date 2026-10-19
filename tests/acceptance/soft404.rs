@@ -17,7 +17,6 @@ fn docs_routes() -> Routes {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S16"]
 async fn s16_probe_with_same_title_marks_suspect() {
     let w = World::new().await;
     w.serve(docs_routes()).await;
@@ -44,7 +43,6 @@ async fn s16_probe_with_same_title_marks_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S17"]
 async fn s17_probe_404_clears_both_and_is_sent_once() {
     let w = World::new().await;
     w.serve(
@@ -75,7 +73,6 @@ async fn s17_probe_404_clears_both_and_is_sent_once() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S18"]
 async fn s18_similar_body_marks_suspect() {
     let w = World::new().await;
     let words: Vec<String> = (0..400).map(|i| format!("word{i}")).collect();
@@ -157,7 +154,6 @@ async fn s20_phrase_in_title_is_ignored_when_probe_is_404() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S21"]
 async fn s21_soft404_false_skips_probe() {
     let mut w = World::new().await;
     w.configure(|s| s.no_soft404_hosts = vec!["127.0.0.1".to_owned()]);
