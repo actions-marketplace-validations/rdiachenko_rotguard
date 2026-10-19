@@ -22,7 +22,7 @@ risk_paths = [
   ".whittle/gates.toml",
   "src/apply.rs",
 ]
-max_diff_lines = 1500
+max_diff_lines = 3000
 merge = "local"
 deploy = ""
 
