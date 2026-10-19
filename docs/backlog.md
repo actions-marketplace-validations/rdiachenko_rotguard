@@ -19,3 +19,5 @@
 - [P2] S37's unreadable-file case uses chmod 000, which root ignores (Docker CI), so the sub-case exits 0 there — tests/acceptance/report.rs:107 — from whittle/link-health, 2026-10-19
 - [P2] The Temporary row of `classify` is unit-tested only with a 307 first hop; add 302 → 200 and 303 → 200 rows — src/check.rs:722 — from whittle/link-health, 2026-10-19
 - [P2] `Url::parse` normalises dot segments in a capture's `original` (`/a/../b` → `/b`, `%2e%2e`), and a `#` in it becomes a fragment, so the snapshot fix can silently differ from the capture; verify the result still ends with the original, else NoFix — src/archive.rs:110 — from whittle/link-health, 2026-10-19
+- [P2] A dead, permanent or suspect finding with `Fix::None` silently prints no detail line, though R19 requires one; assert or test it — src/report.rs:55 — from whittle/link-health, 2026-10-19
+- [P2] `Fix::Manual(String)` drops the typed `NoFix`; a `ManualReason` enum would spare later code matching on strings — src/lib.rs:34 — from whittle/link-health, 2026-10-19
