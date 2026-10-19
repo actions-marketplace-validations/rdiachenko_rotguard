@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 pub mod config;
+pub mod extract;
 
 /// Command-line arguments for `rotguard`.
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
