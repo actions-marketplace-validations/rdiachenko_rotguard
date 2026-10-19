@@ -42,3 +42,6 @@
 - [P2] No `sync_all` before the rename, which weakens R21's atomic write after a power loss — src/apply.rs:99 — from whittle/link-health, 2026-10-19
 - [P2] A content file edited into non-UTF-8, or deleted, during the run gives exit 2 instead of R22's "changed during run" — src/apply.rs:55 — from whittle/link-health, 2026-10-19
 - [P2] The apply unit test can't tell last-to-first from first-to-last (equal-length fixes); use a different-length fix plus CRLF and multibyte text before the spans — src/apply.rs:280 — from whittle/link-health, 2026-10-19
+- [P2] A body read error after a final status discards it (404 + truncated body → Unverifiable "connection", not DEAD); skip or ignore body errors for non-2xx — src/check.rs:181 — from whittle/link-health, 2026-10-19
+- [P2] Archive requests can overlap when a CDX response takes longer than archive_interval_ms; hold the gate across the request if R6's one-in-flight rule is meant to cover the archive — src/archive.rs:124 — from whittle/link-health, 2026-10-19
+- [P2] A leading UTF-8 BOM hides front matter (no date; values extracted as MdText, so writable can't refuse a `'` inside a quoted string); strip it and offset spans by 3 — src/extract.rs:530 — from whittle/link-health, 2026-10-19

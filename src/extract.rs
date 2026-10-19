@@ -729,16 +729,26 @@ fn lex_yaml(block: &str) -> Vec<Token> {
     // While set, lines indented deeper than this belong to the previous scalar
     // (block scalar body or plain/quoted continuation) and hold no tokens.
     let mut inside: Option<usize> = None;
+    // Index of the plain token the previous line pushed, which a continuation line
+    // turns into part of a longer, non-URL scalar.
+    let mut plain: Option<usize> = None;
     for line in block.split_inclusive('\n') {
         let text = line.trim_end_matches(['\n', '\r']);
         let indent = text.len() - text.trim_start_matches(' ').len();
         if let Some(parent) = inside
             && (text.trim().is_empty() || indent > parent)
         {
+            if !text.trim().is_empty()
+                && let Some(i) = plain.take()
+            {
+                tokens.remove(i);
+            }
             base += line.len();
             continue;
         }
+        let before = tokens.len();
         inside = lex_yaml_line(text, base, &mut tokens);
+        plain = (tokens.len() > before && tokens[before].quote == Quote::Bare).then_some(before);
         base += line.len();
     }
     tokens
@@ -944,6 +954,20 @@ mod tests {
         assert_eq!(page.links[0].line, 4);
         assert!(page.links[0].verbatim);
         assert_slices(text, &page);
+    }
+
+    #[test]
+    fn yaml_continued_plain_value_does_not_claim_a_later_link() {
+        let text =
+            "---\nnote: https://a.test/x\n  is worth a read\nsource: https://a.test/x\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1, "{:?}", page.links);
+        let l = &page.links[0];
+        assert_eq!(l.url, "https://a.test/x");
+        assert_eq!(l.line, 4);
+        assert!(l.verbatim);
+        assert_eq!(&text[l.span.clone()], "https://a.test/x");
+        assert!(text[..l.span.start].ends_with("source: "));
     }
 
     #[test]

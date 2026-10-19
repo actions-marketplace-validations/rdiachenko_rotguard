@@ -151,7 +151,26 @@ fn md_dest_ok(fix: &str) -> bool {
             _ => {}
         }
     }
-    depth == 0
+    depth == 0 && !has_char_reference(fix)
+}
+
+/// Whether `s` holds an HTML character reference, which CommonMark decodes in a destination.
+fn has_char_reference(s: &str) -> bool {
+    s.match_indices('&').any(|(i, _)| {
+        let rest = &s[i + 1..];
+        let (digits, valid): (&str, fn(char) -> bool) = if let Some(num) = rest.strip_prefix('#') {
+            match num.strip_prefix(['x', 'X']) {
+                Some(hex) => (hex, |c| c.is_ascii_hexdigit()),
+                None => (num, |c| c.is_ascii_digit()),
+            }
+        } else if rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            (rest, |c| c.is_ascii_alphanumeric())
+        } else {
+            return false;
+        };
+        let len = digits.find(|c| !valid(c)).unwrap_or(digits.len());
+        len > 0 && digits[len..].starts_with(';')
+    })
 }
 
 #[cfg(test)]
@@ -219,6 +238,21 @@ mod tests {
             ("https://a.test/a<b", Ctx::MdDest, true, quote.clone()),
             ("https://a.test/a>b", Ctx::MdDest, true, quote.clone()),
             ("https://a.test/a b", Ctx::MdText, true, ok.clone()),
+            (
+                "https://m.test/n?x=&copy;",
+                Ctx::MdDest,
+                true,
+                quote.clone(),
+            ),
+            ("https://m.test/n?x=&#38;", Ctx::MdDest, true, quote.clone()),
+            (
+                "https://m.test/n?x=&#x26;",
+                Ctx::MdDest,
+                true,
+                quote.clone(),
+            ),
+            ("https://m.test/n?a=1&b=2", Ctx::MdDest, true, ok.clone()),
+            ("https://m.test/n?x=&copy;", Ctx::MdText, true, ok.clone()),
         ];
         for (fix, ctx, verbatim, expected) in rows {
             assert_eq!(
@@ -301,6 +335,30 @@ mod tests {
             Fix::Applied("https://web.test/snap".to_string())
         );
         assert_eq!(leftovers(dir.path()), ["post.md"]);
+    }
+
+    #[test]
+    fn yaml_front_matter_changes_only_the_real_value() {
+        let text =
+            "---\nnote: https://a.test/old\n  is worth a read\nsource: https://a.test/old\n---\n";
+        let dir = site(text);
+        let page = crate::extract::extract(
+            Path::new("post.md"),
+            text,
+            &crate::config::parse("site_url = \"https://site.test\"").unwrap(),
+        );
+        assert_eq!(page.links.len(), 1);
+        let mut findings = vec![Finding {
+            file: PathBuf::from("post.md"),
+            link: page.links[0].clone(),
+            verdict: permanent(),
+            fix: Fix::Proposed("https://a.test/new".to_string()),
+        }];
+        apply(dir.path(), &mut findings).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
+            "---\nnote: https://a.test/old\n  is worth a read\nsource: https://a.test/new\n---\n"
+        );
     }
 
     #[test]
