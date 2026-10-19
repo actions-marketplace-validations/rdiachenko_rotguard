@@ -71,11 +71,14 @@ Rules for every task:
   host_interval: Duration, archive_interval: Duration, recheck_delay: Duration, timeout: Duration,
   deadline: Duration, hosts: HashMap<String, HostConfig> }` (all fields `pub`), with
   `pub struct HostConfig { pub soft404: bool }` (default true), and
-  `pub fn load(site_dir: &Path) -> Result<Config, ConfigError>`. Defaults are as in the design's
-  Config block. Unknown keys are an error. `ConfigError`'s `Display` names the missing file or
-  the bad field. `run` loads the config first and, on error, prints it to stderr and exits 2.
-- Test: unit tests show that a config with only `site_url` gets every default, an unknown key is
-  rejected, and `site_url = 42` gives an error naming `site_url`. Un-pends S1, S2.
+  `pub fn load(site_dir: &Path) -> Result<Config, ConfigError>`, a thin wrapper that reads
+  `rotguard.toml` and calls `pub fn parse(text: &str) -> Result<Config, ConfigError>`. Defaults
+  are as in the design's Config block. Unknown keys are an error. `ConfigError`'s `Display` names
+  the missing file or the bad field. `run` loads the config first and, on error, prints it to
+  stderr and exits 2.
+- Test: unit tests call `parse` on strings, so no test writes a file under `src/` (the fitness
+  rule allows writes only in `src/apply.rs`): a config with only `site_url` gets every default,
+  an unknown key is rejected, and `site_url = 42` gives an error naming `site_url`. Un-pends S1, S2.
 - Covers: R1, S1, S2
 - Commit: Load and validate rotguard.toml
 
@@ -325,12 +328,14 @@ Rules for every task:
 - Files: src/check.rs
 - Interfaces: After the probe step, a 2xx whose probe did not answer 404 or 410 becomes `Suspect`
   naming the phrase, if its title contains a `not_found_phrases` entry, case-insensitively.
+  Skipped when the host's `HostConfig` has `soft404 = false` (R13), like the steps from T13–T14.
 - Test: unit tests:
   - "Page Not Found – Example" with a 200 probe → `Suspect` naming "not found";
-  - "404 errors explained" with a 404 probe → ok.
+  - "404 errors explained" with a 404 probe → ok;
+  - "Page Not Found – Example" with a 200 probe on a host with `soft404 = false` → ok.
 
   Un-pends S19, S20.
-- Covers: R12, S19, S20
+- Covers: R12, R13, S19, S20
 - Commit: Flag pages with not-found titles
 
 ### T16: Decide which fixes can be written
