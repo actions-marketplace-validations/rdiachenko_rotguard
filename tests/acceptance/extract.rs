@@ -3,7 +3,6 @@
 use crate::support::{Routes, Summary, World, page, redirect};
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn s3_extracts_every_link_form_with_lines() {
     let w = World::new().await;
     let mut routes = Routes::new().fixed("/t", page("T", "target"));
@@ -135,7 +134,6 @@ async fn s6_checks_only_external_unignored_urls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S39"]
 async fn s39_bare_url_keeps_parens_and_shortcode_src() {
     let w = World::new().await;
     w.serve(

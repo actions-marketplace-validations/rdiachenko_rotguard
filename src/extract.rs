@@ -1,7 +1,7 @@
 //! Extraction of links and the page date from a content file's text.
 //!
 //! Front matter values and markdown body links (inline links and images, reference
-//! definitions, autolinks and `href`/`src` in raw HTML) are covered.
+//! definitions, autolinks and `href`/`src` in raw HTML) and bare URLs in text are covered.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -184,6 +184,11 @@ fn link(lines: &Lines, url: &str, span: Range<usize>, ctx: Ctx, verbatim: bool) 
     }
 }
 
+static BARE_URL: LazyLock<Regex> = LazyLock::new(|| {
+    // The scheme may follow markdown delimiters such as `_`, `*` or `~`, so `\b` is not used.
+    Regex::new(r#"(?i)(?:^|[^A-Za-z0-9])(https?://[^\s"'<>]+)"#).expect("regex is a literal")
+});
+
 static HTML_ATTR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')"#).expect("regex is a literal")
 });
@@ -203,8 +208,40 @@ fn body_links(page: &mut Page, text: &str, lines: &Lines, body_start: usize) {
     let body = &text[body_start..];
     let mut parser = Parser::new_ext(body, Options::empty()).into_offset_iter();
     let mut open: Vec<OpenLink> = Vec::new();
+    // Where bare URLs are searched: text containers minus the ranges already covered.
+    let mut containers: Vec<Range<usize>> = Vec::new();
+    let mut covered: Vec<Range<usize>> = Vec::new();
+    let mut container_start: Option<usize> = None;
+    // The inline run of a tight list item, which sits outside any paragraph.
+    let mut tight: Option<Range<usize>> = None;
+    let mut in_code_block = false;
     for (event, range) in parser.by_ref() {
         let range = body_start + range.start..body_start + range.end;
+        match &event {
+            Event::Start(Tag::Paragraph | Tag::Heading { .. }) => {
+                container_start = Some(range.start)
+            }
+            Event::End(TagEnd::Paragraph | TagEnd::Heading(_)) => {
+                if let Some(start) = container_start.take() {
+                    containers.push(start..range.end);
+                }
+            }
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+            Event::End(TagEnd::CodeBlock) => in_code_block = false,
+            Event::End(TagEnd::Link | TagEnd::Image) => covered.push(range.clone()),
+            Event::Code(_) | Event::Html(_) | Event::InlineHtml(_) => covered.push(range.clone()),
+            _ => {}
+        }
+        // One container per inline run outside a paragraph or heading, closed at the next
+        // block-level event.
+        if container_start.is_none() && !in_code_block && is_inline(&event) {
+            match &mut tight {
+                Some(run) => run.end = run.end.max(range.end),
+                None => tight = Some(range.clone()),
+            }
+        } else if let Some(run) = tight.take() {
+            containers.push(run);
+        }
         match event {
             Event::Start(Tag::Link {
                 link_type,
@@ -260,6 +297,118 @@ fn body_links(page: &mut Page, text: &str, lines: &Lines, body_start: usize) {
         let from = text[span.clone()].find("]:").map_or(0, |n| n + 2);
         page.links
             .push(dest_link(text, lines, &def.dest, span, from));
+    }
+    containers.extend(tight);
+    for container in containers {
+        bare_links(page, text, lines, container, &covered);
+    }
+}
+
+/// Records the bare URLs in `container`, skipping the `covered` sub-ranges.
+fn bare_links(
+    page: &mut Page,
+    text: &str,
+    lines: &Lines,
+    container: Range<usize>,
+    covered: &[Range<usize>],
+) {
+    let mut cuts: Vec<&Range<usize>> = covered
+        .iter()
+        .filter(|c| c.start < container.end && c.end > container.start)
+        .collect();
+    cuts.sort_by_key(|c| c.start);
+    let mut from = container.start;
+    for cut in cuts {
+        if cut.start > from {
+            scan_bare(page, text, lines, from..cut.start);
+        }
+        from = from.max(cut.end);
+    }
+    if from < container.end {
+        scan_bare(page, text, lines, from..container.end);
+    }
+}
+
+/// Whether `event` is part of an inline run (as opposed to a block-level event).
+fn is_inline(event: &Event) -> bool {
+    match event {
+        Event::Text(_)
+        | Event::Code(_)
+        | Event::InlineHtml(_)
+        | Event::SoftBreak
+        | Event::HardBreak => true,
+        Event::Start(tag) => matches!(
+            tag,
+            Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. } | Tag::Image { .. }
+        ),
+        Event::End(tag) => matches!(
+            tag,
+            TagEnd::Emphasis
+                | TagEnd::Strong
+                | TagEnd::Strikethrough
+                | TagEnd::Link
+                | TagEnd::Image
+        ),
+        _ => false,
+    }
+}
+
+fn scan_bare(page: &mut Page, text: &str, lines: &Lines, segment: Range<usize>) {
+    for caps in BARE_URL.captures_iter(&text[segment.clone()]) {
+        let Some(m) = caps.get(1) else { continue };
+        let raw = trim_url(m.as_str());
+        let decoded = unescape(raw);
+        if keep(&decoded) {
+            let start = segment.start + m.start();
+            page.links.push(link(
+                lines,
+                &decoded,
+                start..start + raw.len(),
+                Ctx::MdText,
+                decoded == raw,
+            ));
+        }
+    }
+}
+
+/// Decodes CommonMark backslash escapes and HTML character references.
+fn unescape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut run = 0;
+    let mut chars = raw.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c == '\\'
+            && let Some(&(_, next)) = chars.peek()
+            && next.is_ascii_punctuation()
+        {
+            out.push_str(&decode_entities(&raw[run..i]));
+            out.push(next);
+            chars.next();
+            run = i + 1 + next.len_utf8();
+        }
+    }
+    out.push_str(&decode_entities(&raw[run..]));
+    out
+}
+
+/// Trims trailing punctuation and markdown delimiters, and a trailing `)` or `]` unless its
+/// brackets balance.
+fn trim_url(mut url: &str) -> &str {
+    loop {
+        let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_', '~']);
+        let trimmed = strip_unbalanced(trimmed, ')', '(');
+        let trimmed = strip_unbalanced(trimmed, ']', '[');
+        if trimmed.len() == url.len() {
+            return url;
+        }
+        url = trimmed;
+    }
+}
+
+fn strip_unbalanced(s: &str, close: char, open: char) -> &str {
+    match s.strip_suffix(close) {
+        Some(rest) if s.matches(close).count() > s.matches(open).count() => rest,
+        _ => s,
     }
 }
 
@@ -697,7 +846,7 @@ mod tests {
 
     #[test]
     fn toml_nested_array_of_tables_and_date() {
-        let text = "+++\ntitle = \"T\"\ndate = 2024-03-05T10:00:00Z\n\n[[discussedOn]]\nurl = \"https://a.test/x\"\n\n[[discussedOn]]\nurl = 'https://b.test/y'\n+++\nbody https://ignored.test\n";
+        let text = "+++\ntitle = \"T\"\ndate = 2024-03-05T10:00:00Z\n\n[[discussedOn]]\nurl = \"https://a.test/x\"\n\n[[discussedOn]]\nurl = 'https://b.test/y'\n+++\nbody\n";
         let page = run(text);
         assert_eq!(page.date, NaiveDate::from_ymd_opt(2024, 3, 5));
         let got: Vec<_> = page
@@ -896,8 +1045,14 @@ mod tests {
 
     #[test]
     fn no_front_matter_or_unclosed_yields_nothing() {
-        assert!(run("# title\nhttps://a.test\n").links.is_empty());
-        assert!(run("+++\nu = \"https://a.test\"\n").links.is_empty());
+        assert!(run("# title\nplain\n").links.is_empty());
+        // Unclosed front matter is plain body text: only a bare URL, never a front matter value.
+        let links = run("+++\nu = \"https://a.test\"\n").links;
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            (links[0].url.as_str(), links[0].line, links[0].ctx),
+            ("https://a.test", 2, Ctx::MdText)
+        );
         assert_eq!(run("+++\nu = \n+++\n").links, []);
     }
 
@@ -1057,5 +1212,108 @@ mod tests {
         let text = "---\nu: https://a.test/x\nmd: \"[a](https://b.test/y)\"\n---\nbody\n";
         let urls: Vec<_> = run(text).links.into_iter().map(|l| l.url).collect();
         assert_eq!(urls, ["https://a.test/x"]);
+    }
+
+    #[test]
+    fn bare_urls_are_trimmed_and_balanced() {
+        let text = "see https://m.test/a_b_(c)&x=1 now\n\n(see https://m.test/x).\n\n{{< figure src=\"https://m.test/s\" alt=\"x\" >}}\n\n- tight https://m.test/t, ok\n";
+        let page = run(text);
+        assert_slices(text, &page);
+        let got: Vec<_> = page
+            .links
+            .iter()
+            .map(|l| (l.url.as_str(), l.line, l.ctx, l.verbatim))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("https://m.test/a_b_(c)&x=1", 1, Ctx::MdText, true),
+                ("https://m.test/x", 3, Ctx::MdText, true),
+                ("https://m.test/s", 5, Ctx::MdText, true),
+                ("https://m.test/t", 7, Ctx::MdText, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_url_in_file_without_front_matter() {
+        let page = run("# title\n\nsee https://a.test/x here\n");
+        let got: Vec<_> = page
+            .links
+            .iter()
+            .map(|l| (l.url.as_str(), l.line))
+            .collect();
+        assert_eq!(got, [("https://a.test/x", 3)]);
+    }
+
+    #[test]
+    fn tight_list_urls_survive_inline_markup() {
+        let cases = [
+            ("- https://m.test/a\\_b\n", "https://m.test/a_b", false),
+            (
+                "- see https://m.test/**b**/c\n",
+                "https://m.test/**b**/c",
+                true,
+            ),
+            ("> - https://m.test/*q*\n", "https://m.test/*q", true),
+        ];
+        for (text, url, verbatim) in cases {
+            let page = run(text);
+            assert_slices(text, &page);
+            let got: Vec<_> = page
+                .links
+                .iter()
+                .map(|l| (l.url.as_str(), l.verbatim))
+                .collect();
+            assert_eq!(got, [(url, verbatim)], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn bare_urls_drop_markdown_delimiters() {
+        let cases = [
+            ("**see https://m.test/bold**\n", "https://m.test/bold"),
+            ("[see https://m.test/br]\n", "https://m.test/br"),
+            ("_https://m.test/ital_\n", "https://m.test/ital"),
+        ];
+        for (text, url) in cases {
+            let got: Vec<_> = run(text).links.into_iter().map(|l| l.url).collect();
+            assert_eq!(got, [url], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn bare_urls_decode_escapes_and_entities() {
+        let text = "see https://m.test/a\\_b\n\nhttps://m.test/a?b=c&amp;d=1\n";
+        let page = run(text);
+        let got: Vec<_> = page
+            .links
+            .iter()
+            .map(|l| (l.url.as_str(), l.verbatim))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("https://m.test/a_b", false),
+                ("https://m.test/a?b=c&d=1", false)
+            ]
+        );
+        assert_eq!(&text[page.links[0].span.clone()], "https://m.test/a\\_b");
+    }
+
+    #[test]
+    fn bare_urls_skip_links_code_and_html() {
+        let text = "[x](https://m.test/a) and <https://m.test/b> and `https://m.test/c` and <a href=\"https://m.test/d\">d</a> and [https://m.test/e](https://m.test/f)\n\n[r]: https://m.test/g\n";
+        let urls: Vec<_> = body(text).into_iter().map(|l| (l.0, l.2)).collect();
+        assert_eq!(
+            urls,
+            [
+                ("https://m.test/a".to_owned(), Ctx::MdDest),
+                ("https://m.test/b".to_owned(), Ctx::MdDest),
+                ("https://m.test/d".to_owned(), Ctx::Html),
+                ("https://m.test/f".to_owned(), Ctx::MdDest),
+                ("https://m.test/g".to_owned(), Ctx::MdDest),
+            ]
+        );
     }
 }

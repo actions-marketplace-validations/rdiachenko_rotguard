@@ -25,3 +25,4 @@
 - [P2] An unreadable directory outside the content globs (e.g. `public/`) aborts the run with exit 2; walk only the globs' literal prefixes, or ignore walk errors on non-matching paths — src/lib.rs:107 — from whittle/link-health, 2026-10-19
 - [P2] A panicked archive lookup is reported as "manual fix: deadline", hiding the bug behind an R15 reason — src/lib.rs:262 — from whittle/link-health, 2026-10-19
 - [P2] lib.rs has no unit tests for paths no scenario covers: a permanent target's own fragment kept, an ignored URL counted once across fragments, an unreadable content file giving exit 2 — src/lib.rs — from whittle/link-health, 2026-10-19
+- [P2] Bare-URL trimming can split a trailing backslash escape (`see https://m.test/a\_` gives verbatim `…/a\`); never trim a character escaped by `\`, or trim the `\` with it — src/extract.rs:396 — from whittle/link-health, 2026-10-19
