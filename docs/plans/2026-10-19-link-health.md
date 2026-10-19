@@ -1,5 +1,6 @@
 # Plan: rotguard, outbound link health for static sites
 Design: docs/design/link-health.md
+Risk paths: Cargo.toml, Cargo.lock, src/apply.rs — T1 adds the design's dependencies; T16–T17 write fixes
 
 Order: skeleton, then the pending acceptance tests, then modules bottom-up (config, extract,
 check, archive, report), then the wiring task that turns most scenarios on. The later tasks each
