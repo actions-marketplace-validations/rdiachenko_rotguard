@@ -1,4 +1,5 @@
-//! Fetching URLs politely: one request in flight per host, spaced starts, bounded hosts.
+//! Fetching URLs politely (one request in flight per host, spaced starts, bounded hosts),
+//! classifying the outcome, and checking many URLs with retries under a deadline.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -11,7 +12,8 @@ use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
 use serde::Serialize;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{Instant, sleep_until};
+use tokio::task::JoinSet;
+use tokio::time::{Instant, sleep, sleep_until, timeout_at};
 use url::Url;
 
 use crate::config::Config;
@@ -318,6 +320,84 @@ pub fn classify(outcome: &Result<Fetched, FetchError>) -> Verdict {
             }
         }
         status => unverifiable(status.to_string()),
+    }
+}
+
+/// Most retries after a timeout, a 5xx or a connection error.
+const TRANSIENT_RETRIES: u32 = 2;
+/// Longest wait honoured for a 429's `Retry-After`.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// Checks every URL concurrently, within the fetcher's gates.
+///
+/// Retries transient failures, re-checks a first `Dead` after `cfg.recheck_delay`, and gives
+/// every URL still unfinished at `deadline` the verdict `Unverifiable("deadline")`.
+pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashMap<Url, Verdict> {
+    let fetcher = Arc::new(Fetcher::new(cfg));
+    let recheck_delay = cfg.recheck_delay;
+    let mut tasks = JoinSet::new();
+    for url in urls {
+        let fetcher = Arc::clone(&fetcher);
+        tasks.spawn(async move {
+            let verdict = timeout_at(deadline, check_one(&fetcher, &url, recheck_delay))
+                .await
+                .unwrap_or_else(|_| Verdict::Unverifiable {
+                    reason: "deadline".to_owned(),
+                });
+            (url, verdict)
+        });
+    }
+    let mut verdicts = HashMap::with_capacity(tasks.len());
+    while let Some(joined) = tasks.join_next().await {
+        // A task only fails by panicking, which is a bug to surface, not to hide.
+        let (url, verdict) = joined.expect("a check task does not panic");
+        verdicts.insert(url, verdict);
+    }
+    verdicts
+}
+
+/// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`.
+async fn check_one(fetcher: &Fetcher, url: &Url, recheck_delay: Duration) -> Verdict {
+    let first = classify(&fetch_with_retries(fetcher, url).await);
+    if !matches!(first, Verdict::Dead { .. }) {
+        return first;
+    }
+    sleep(recheck_delay).await;
+    classify(&fetch_with_retries(fetcher, url).await)
+}
+
+/// What to do after an outcome.
+enum Retry {
+    No,
+    Transient,
+    RateLimited(Option<Duration>),
+}
+
+fn retry_for(outcome: &Result<Fetched, FetchError>) -> Retry {
+    match outcome {
+        Err(FetchError::Timeout | FetchError::Connect) => Retry::Transient,
+        Err(_) => Retry::No,
+        Ok(fetched) => match fetched.chain.last().map(|hop| hop.status) {
+            Some(500..=599) => Retry::Transient,
+            Some(429) => Retry::RateLimited(fetched.retry_after),
+            _ => Retry::No,
+        },
+    }
+}
+
+async fn fetch_with_retries(fetcher: &Fetcher, url: &Url) -> Result<Fetched, FetchError> {
+    let mut transient = 0;
+    let mut rate_limited = false;
+    loop {
+        let outcome = fetcher.fetch(url).await;
+        match retry_for(&outcome) {
+            Retry::Transient if transient < TRANSIENT_RETRIES => transient += 1,
+            Retry::RateLimited(after) if !rate_limited => {
+                rate_limited = true;
+                sleep(after.unwrap_or(fetcher.interval).min(MAX_RETRY_AFTER)).await;
+            }
+            Retry::No | Retry::Transient | Retry::RateLimited(_) => return outcome,
+        }
     }
 }
 
@@ -753,5 +833,177 @@ mod tests {
         for (name, outcome, expected) in cases {
             assert_eq!(classify(&outcome), expected, "{name}");
         }
+    }
+
+    fn config_for(extra: &str) -> Config {
+        config::parse(&format!(
+            "site_url = \"https://site.example/\"\nuser_agent = \"rotguard-unit/1.0\"\nhost_interval_ms = 0\n{extra}"
+        ))
+        .expect("test config is valid")
+    }
+
+    fn far() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
+
+    async fn gets(server: &MockServer) -> usize {
+        server.received_requests().await.unwrap().len()
+    }
+
+    /// Answers each request from `replies` in turn (the last repeats), noting when it came.
+    struct Script {
+        replies: Vec<ResponseTemplate>,
+        times: Arc<StdMutex<Vec<Instant>>>,
+    }
+
+    impl Respond for Script {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            let mut times = self.times.lock().unwrap();
+            let reply = self.replies[times.len().min(self.replies.len() - 1)].clone();
+            times.push(Instant::now());
+            reply
+        }
+    }
+
+    async fn scripted(replies: Vec<ResponseTemplate>) -> (MockServer, Arc<StdMutex<Vec<Instant>>>) {
+        let server = MockServer::start().await;
+        let times = Arc::new(StdMutex::new(Vec::new()));
+        Mock::given(method("GET"))
+            .respond_with(Script {
+                replies,
+                times: Arc::clone(&times),
+            })
+            .mount(&server)
+            .await;
+        (server, times)
+    }
+
+    fn unverifiable_reason(verdicts: &HashMap<Url, Verdict>, url: &Url) -> String {
+        match &verdicts[url] {
+            Verdict::Unverifiable { reason } => reason.clone(),
+            other => panic!("expected unverifiable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_5xx_is_retried_twice() {
+        let server = MockServer::start().await;
+        Mock::given(path("/x"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let u = url(&server, "/x");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(unverifiable_reason(&got, &u), "503");
+        assert_eq!(gets(&server).await, 3);
+    }
+
+    #[tokio::test]
+    async fn a_slow_handler_times_out_after_three_gets() {
+        let server = MockServer::start().await;
+        Mock::given(path("/x"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+            .mount(&server)
+            .await;
+        let u = url(&server, "/x");
+        let got = check_all(vec![u.clone()], &config_for("timeout_ms = 100"), far()).await;
+        assert_eq!(unverifiable_reason(&got, &u), "timeout");
+        assert_eq!(gets(&server).await, 3);
+    }
+
+    #[tokio::test]
+    async fn a_429_is_retried_once_after_its_retry_after() {
+        let (server, times) = scripted(vec![
+            ResponseTemplate::new(429).insert_header("Retry-After", "1"),
+            ResponseTemplate::new(200),
+        ])
+        .await;
+        let u = url(&server, "/x");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
+        let times = times.lock().unwrap();
+        assert_eq!(times.len(), 2);
+        assert!(times[1] - times[0] >= Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn a_second_429_is_unverifiable_after_two_gets() {
+        let server = MockServer::start().await;
+        Mock::given(path("/x"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+        let u = url(&server, "/x");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(unverifiable_reason(&got, &u), "429");
+        assert_eq!(gets(&server).await, 2);
+    }
+
+    #[tokio::test]
+    async fn a_404_then_a_200_is_ok() {
+        let (server, times) =
+            scripted(vec![ResponseTemplate::new(404), ResponseTemplate::new(200)]).await;
+        let u = url(&server, "/x");
+        let got = check_all(vec![u.clone()], &config_for("recheck_delay_ms = 50"), far()).await;
+        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
+        assert_eq!(times.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_404_twice_is_dead_after_the_recheck_delay() {
+        let (server, times) = scripted(vec![ResponseTemplate::new(404)]).await;
+        let u = url(&server, "/x");
+        let got = check_all(
+            vec![u.clone()],
+            &config_for("recheck_delay_ms = 300"),
+            far(),
+        )
+        .await;
+        assert_eq!(
+            got[&u],
+            Verdict::Dead {
+                reason: "404".to_owned()
+            }
+        );
+        let times = times.lock().unwrap();
+        assert_eq!(times.len(), 2);
+        assert!(times[1] - times[0] >= Duration::from_millis(300));
+    }
+
+    #[tokio::test]
+    async fn a_hanging_handler_is_unverifiable_at_the_deadline() {
+        let server = MockServer::start().await;
+        Mock::given(path("/x"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(10)))
+            .mount(&server)
+            .await;
+        let u = url(&server, "/x");
+        let started = Instant::now();
+        let got = check_all(
+            vec![u.clone()],
+            &config_for("timeout_ms = 30000"),
+            started + Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(unverifiable_reason(&got, &u), "deadline");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn every_url_gets_a_verdict() {
+        let server = MockServer::start().await;
+        Mock::given(path("/a"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(path("/b"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let (a, b) = (url(&server, "/a"), url(&server, "/b"));
+        let got = check_all(vec![a.clone(), b.clone()], &config_for(""), far()).await;
+        assert_eq!(got.len(), 2);
+        assert!(matches!(got[&a], Verdict::Ok { .. }));
+        assert_eq!(unverifiable_reason(&got, &b), "403");
     }
 }
