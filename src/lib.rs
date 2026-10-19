@@ -3,6 +3,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+pub mod config;
+
 /// Command-line arguments for `rotguard`.
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(version, about = "Check a site's links for rot")]
@@ -21,6 +23,12 @@ pub struct Args {
 /// Runs the main flow and returns the process exit code.
 #[must_use]
 pub fn run(args: Args) -> ExitCode {
-    let _ = args;
+    let _config = match config::load(&args.site_dir) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("rotguard: {err}");
+            return ExitCode::from(2);
+        }
+    };
     ExitCode::SUCCESS
 }

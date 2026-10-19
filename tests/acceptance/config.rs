@@ -3,7 +3,6 @@
 use crate::support::{Routes, World, page};
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn s1_missing_config_exits_2() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/a", page("A", "a"))).await;
@@ -22,7 +21,6 @@ async fn s1_missing_config_exits_2() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn s2_invalid_config_exits_2() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/a", page("A", "a"))).await;
