@@ -18,3 +18,4 @@
 - [P2] `Out::entries` panics on any unindented stdout line that isn't a header or the summary, so an extra informational line fails every `entry()` test — tests/acceptance/support.rs:683 — from whittle/link-health, 2026-10-19
 - [P2] S37's unreadable-file case uses chmod 000, which root ignores (Docker CI), so the sub-case exits 0 there — tests/acceptance/report.rs:107 — from whittle/link-health, 2026-10-19
 - [P2] The Temporary row of `classify` is unit-tested only with a 307 first hop; add 302 → 200 and 303 → 200 rows — src/check.rs:722 — from whittle/link-health, 2026-10-19
+- [P2] `Url::parse` normalises dot segments in a capture's `original` (`/a/../b` → `/b`, `%2e%2e`), and a `#` in it becomes a fragment, so the snapshot fix can silently differ from the capture; verify the result still ends with the original, else NoFix — src/archive.rs:110 — from whittle/link-health, 2026-10-19

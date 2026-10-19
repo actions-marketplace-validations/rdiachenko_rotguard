@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+pub mod archive;
 pub mod check;
 pub mod config;
 pub mod extract;
