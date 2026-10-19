@@ -350,17 +350,19 @@ pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashM
     let fetcher = Arc::new(Fetcher::new(cfg));
     let probes = Arc::new(Probes::default());
     let recheck_delay = cfg.recheck_delay;
+    let phrases: Arc<[String]> = cfg.not_found_phrases.as_slice().into();
     let mut tasks = JoinSet::new();
     for url in urls {
         let fetcher = Arc::clone(&fetcher);
         let probes = Arc::clone(&probes);
+        let phrases = Arc::clone(&phrases);
         let host = url
             .host_str()
             .and_then(|name| cfg.hosts.get(name))
             .cloned()
             .unwrap_or_default();
         tasks.spawn(async move {
-            let check = check_one(&fetcher, &probes, &url, &host, recheck_delay);
+            let check = check_one(&fetcher, &probes, &phrases, &url, &host, recheck_delay);
             let verdict =
                 timeout_at(deadline, check)
                     .await
@@ -380,10 +382,12 @@ pub async fn check_all(urls: Vec<Url>, cfg: &Config, deadline: Instant) -> HashM
 }
 
 /// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`; a 2xx
-/// that passes classification is probed for soft-404 behaviour.
+/// that passes classification is probed for soft-404 behaviour and its title is checked
+/// against the not-found `phrases`.
 async fn check_one(
     fetcher: &Fetcher,
     probes: &Probes,
+    phrases: &[String],
     url: &Url,
     host: &HostConfig,
     recheck_delay: Duration,
@@ -397,7 +401,6 @@ async fn check_one(
     let (Ok(fetched), true) = (
         &outcome,
         host.soft404
-            && url.path() != "/"
             && matches!(
                 verdict,
                 Verdict::Ok { .. } | Verdict::Permanent { .. } | Verdict::Temporary { .. }
@@ -405,10 +408,10 @@ async fn check_one(
     ) else {
         return verdict;
     };
-    match probes.reason(fetcher, url, fetched).await {
+    match probes.reason(fetcher, url, fetched, phrases).await {
         Some(reason) => Verdict::Suspect {
             chain: fetched.chain.clone(),
-            reason: reason.to_owned(),
+            reason,
         },
         None => verdict,
     }
@@ -421,14 +424,20 @@ const SIMILAR_BODY: f64 = 0.9;
 
 /// What a probe URL returned, kept for comparing with every page under the same parent path.
 #[derive(Debug)]
-struct Probe {
-    final_url: Url,
-    title: String,
-    shingles: HashSet<String>,
+enum ProbeResult {
+    /// The probe ended in a response with this status.
+    Answered {
+        status: u16,
+        final_url: Url,
+        title: String,
+        shingles: HashSet<String>,
+    },
+    /// The probe could not be fetched.
+    Failed,
 }
 
 /// Probes by (origin, parent path); each cell is filled by the first check that needs it.
-type ProbeCache = HashMap<(String, String), Arc<OnceCell<Option<Probe>>>>;
+type ProbeCache = HashMap<(String, String), Arc<OnceCell<Arc<ProbeResult>>>>;
 
 /// Probe results shared by all checks, one fetch per (origin, parent path).
 #[derive(Debug, Default)]
@@ -437,52 +446,83 @@ struct Probes {
 }
 
 impl Probes {
-    /// Why `url`, which ended in `fetched`, looks like a soft 404, if the probe says so.
+    /// Why `url`, which ended in 2xx `fetched`, looks like a soft 404, if the probe or the
+    /// title says so. A non-root URL is probed first; the root has no probe.
     async fn reason(
         &self,
         fetcher: &Fetcher,
         url: &Url,
         fetched: &Fetched,
-    ) -> Option<&'static str> {
+        phrases: &[String],
+    ) -> Option<String> {
+        let last = fetched.chain.last()?;
+        let text = String::from_utf8_lossy(&fetched.body);
+        let title = title_of(&text);
+        let mut probe_status = None;
+        if url.path() != "/" {
+            let probe = self.probe(fetcher, url).await;
+            if let ProbeResult::Answered {
+                status,
+                final_url,
+                title: probe_title,
+                shingles: probe_shingles,
+            } = &*probe
+            {
+                probe_status = Some(*status);
+                // Only a 2xx probe is a page to compare with.
+                if (200..300).contains(status) {
+                    if last.url == *final_url {
+                        return Some("probe: same final URL".to_owned());
+                    } else if !title.is_empty() && title == *probe_title {
+                        return Some("probe: same title".to_owned());
+                    } else if jaccard(&shingles(&text), probe_shingles) >= SIMILAR_BODY {
+                        return Some("probe: similar body".to_owned());
+                    }
+                }
+            }
+        }
+        if matches!(probe_status, Some(404 | 410)) {
+            return None;
+        }
+        let lowered = title.to_lowercase();
+        phrases.iter().find_map(|phrase| {
+            let phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+            let phrase = phrase.to_lowercase();
+            (!phrase.is_empty() && lowered.contains(&phrase))
+                .then(|| format!("title says \"{phrase}\""))
+        })
+    }
+
+    /// The probe for `url`'s parent path, fetched by the first caller.
+    async fn probe(&self, fetcher: &Fetcher, url: &Url) -> Arc<ProbeResult> {
         let parent = url.path().rsplit_once('/').map_or("/", |(dir, _)| dir);
         let cell = {
             let mut cache = self.cache.lock().expect("no code panics holding this lock");
             let key = (url.origin().ascii_serialization(), parent.to_owned());
             Arc::clone(cache.entry(key).or_default())
         };
+        let mut target = url.clone();
+        target.set_path(&format!("{parent}/{}", random_token()));
+        target.set_query(None);
+        target.set_fragment(None);
         let probe = cell
             .get_or_init(|| async {
-                let mut target = url.clone();
-                target.set_path(&format!("{parent}/{}", random_token()));
-                target.set_query(None);
-                target.set_fragment(None);
-                // A failed or non-2xx probe is no evidence, not a finding.
-                let probed = fetcher.fetch(&target).await.ok()?;
-                let last = probed.chain.last()?;
-                if !(200..300).contains(&last.status) {
-                    return None;
-                }
+                let Ok(probed) = fetcher.fetch(&target).await else {
+                    return Arc::new(ProbeResult::Failed);
+                };
+                let Some(last) = probed.chain.last() else {
+                    return Arc::new(ProbeResult::Failed);
+                };
                 let text = String::from_utf8_lossy(&probed.body);
-                Some(Probe {
+                Arc::new(ProbeResult::Answered {
+                    status: last.status,
                     final_url: last.url.clone(),
                     title: title_of(&text),
                     shingles: shingles(&text),
                 })
             })
-            .await
-            .as_ref()?;
-        let last = fetched.chain.last()?;
-        let text = String::from_utf8_lossy(&fetched.body);
-        let title = title_of(&text);
-        if last.url == probe.final_url {
-            Some("probe: same final URL")
-        } else if !title.is_empty() && title == probe.title {
-            Some("probe: same title")
-        } else if jaccard(&shingles(&text), &probe.shingles) >= SIMILAR_BODY {
-            Some("probe: similar body")
-        } else {
-            None
-        }
+            .await;
+        Arc::clone(probe)
     }
 }
 
@@ -1394,6 +1434,76 @@ mod tests {
         let u = url(&server, "/x/a");
         let got = check_all(vec![u.clone()], &config_for(""), far()).await;
         assert_eq!(reason_of(&got[&u]), "probe: similar body");
+    }
+
+    #[tokio::test]
+    async fn a_not_found_title_with_a_200_probe_is_suspect() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "^/z/a$",
+            page("Page Not Found \u{2013} Example", "sorry"),
+        )
+        .await;
+        mount(
+            &server,
+            "^/z/[a-z0-9]{24}$",
+            page(
+                "Unrelated heading",
+                "completely different words appear here",
+            ),
+        )
+        .await;
+        let u = url(&server, "/z/a");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(reason_of(&got[&u]), "title says \"not found\"");
+    }
+
+    #[tokio::test]
+    async fn a_phrase_in_the_title_is_ignored_when_the_probe_is_404() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "^/w/a$",
+            page("404 errors explained", "an article"),
+        )
+        .await;
+        let u = url(&server, "/w/a");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
+    }
+
+    #[tokio::test]
+    async fn a_phrase_in_the_title_is_ignored_when_soft404_is_off() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "^/z/a$",
+            page("Page Not Found \u{2013} Example", "sorry"),
+        )
+        .await;
+        mount(
+            &server,
+            "^/z/[a-z0-9]{24}$",
+            page(
+                "Unrelated heading",
+                "completely different words appear here",
+            ),
+        )
+        .await;
+        let u = url(&server, "/z/a");
+        let got = check_all(vec![u.clone()], &config_for(NO_PROBE), far()).await;
+        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_probe_does_not_hide_a_not_found_title() {
+        let server = MockServer::start().await;
+        mount(&server, "^/z/a$", page("Not Found", "sorry")).await;
+        mount(&server, "^/z/[a-z0-9]{24}$", ResponseTemplate::new(500)).await;
+        let u = url(&server, "/z/a");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(reason_of(&got[&u]), "title says \"not found\"");
     }
 
     #[tokio::test]

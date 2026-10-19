@@ -102,7 +102,6 @@ async fn s18_similar_body_marks_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S19"]
 async fn s19_not_found_title_marks_suspect() {
     let w = World::new().await;
     w.serve(
@@ -136,7 +135,6 @@ async fn s19_not_found_title_marks_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S20"]
 async fn s20_phrase_in_title_is_ignored_when_probe_is_404() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/w/a", page("404 errors explained", "an article")))

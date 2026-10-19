@@ -32,3 +32,5 @@
 - [P2] The visible-text regex goes quadratic on a hostile body (`<script></script><!--` repeated to 256 KB: 2.9 s on a tokio worker, so the deadline can't interrupt it); strip blocks with `find` for each closer, or use spawn_blocking — src/check.rs:508 — from whittle/link-health, 2026-10-19
 - [P2] For a path ending in `/` the probe is a child (`/docs/` → `/docs/<token>`), not a sibling, so sites that redirect unknown sub-paths to the section index flag directory-style pages; R11 is ambiguous about the empty last segment — src/check.rs:447 — from whittle/link-health, 2026-10-19
 - [P2] No test covers the "probe: same final URL" signal — src/check.rs:477 — from whittle/link-health, 2026-10-19
+- [P2] No test shows the probe signals ignore a non-2xx probe (every non-2xx probe in tests has an empty body); add a 404 probe with the page's title and expect Ok — src/check.rs:473 — from whittle/link-health, 2026-10-19
+- [P2] No test covers a root URL with a not-found title (the title check runs without a probe) — src/check.rs:462 — from whittle/link-health, 2026-10-19
