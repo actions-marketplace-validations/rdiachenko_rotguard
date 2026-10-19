@@ -5,7 +5,6 @@ use std::time::Duration;
 use crate::support::{Routes, Summary, USER_AGENT, World, assert_gaps, page, redirect, status};
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S7"]
 async fn s7_checks_each_distinct_url_once() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/dup", page("Dup", "dup")))
@@ -26,7 +25,6 @@ async fn s7_checks_each_distinct_url_once() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S8"]
 async fn s8_starts_requests_to_a_host_one_interval_apart() {
     let mut w = World::new().await;
     w.configure(|s| s.host_interval_ms = 300);
@@ -64,7 +62,6 @@ async fn s8_starts_requests_to_a_host_one_interval_apart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S8"]
 async fn s8_requests_to_a_host_do_not_overlap() {
     let mut w = World::new().await;
     w.configure(|s| s.host_interval_ms = 300);
@@ -105,7 +102,6 @@ async fn s8_requests_to_a_host_do_not_overlap() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S9"]
 async fn s9_dead_after_two_attempts_apart() {
     let mut w = World::new().await;
     w.configure(|s| s.recheck_delay_ms = 200);
@@ -128,7 +124,6 @@ async fn s9_dead_after_two_attempts_apart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S10"]
 async fn s10_flaky_404_then_200_is_ok() {
     let w = World::new().await;
     w.serve(Routes::new().with("/flaky", |_, n| {
@@ -153,7 +148,6 @@ async fn s10_flaky_404_then_200_is_ok() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S11"]
 async fn s11_unresolvable_host_is_dead_dns() {
     let w = World::new().await;
     w.site
@@ -172,7 +166,6 @@ async fn s11_unresolvable_host_is_dead_dns() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S12"]
 async fn s12_permanent_redirect_proposes_target_with_fragment() {
     let w = World::new().await;
     w.serve(
@@ -197,7 +190,6 @@ async fn s12_permanent_redirect_proposes_target_with_fragment() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S13"]
 async fn s13_fix_is_last_permanent_hop_of_leading_run() {
     let w = World::new().await;
     w.serve(
@@ -222,7 +214,6 @@ async fn s13_fix_is_last_permanent_hop_of_leading_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S14"]
 async fn s14_temporary_redirect_reports_final_url() {
     let w = World::new().await;
     w.serve(
@@ -319,7 +310,6 @@ async fn s43_temporary_redirect_to_root_is_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S22"]
 async fn s22_unverifiable_statuses_and_retries() {
     let mut w = World::new().await;
     w.configure(|s| s.timeout_ms = Some(200));
@@ -364,7 +354,6 @@ async fn s22_unverifiable_statuses_and_retries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S23"]
 async fn s23_429_retries_after_retry_after() {
     let w = World::new().await;
     w.serve(Routes::new().with("/busy", |_, n| {
@@ -391,7 +380,6 @@ async fn s23_429_retries_after_retry_after() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S24"]
 async fn s24_deadline_marks_unfinished_urls() {
     let mut w = World::new().await;
     w.configure(|s| {
@@ -423,7 +411,6 @@ async fn s24_deadline_marks_unfinished_urls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S41"]
 async fn s41_chain_to_404_is_dead_and_odd_answers_unverifiable() {
     let w = World::new().await;
     w.serve(

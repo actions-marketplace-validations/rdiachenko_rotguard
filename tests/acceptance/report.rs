@@ -112,7 +112,6 @@ async fn s37_exit_codes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S38"]
 async fn s38_unverifiable_fails_only_with_strict() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/forbidden", status(403)))

@@ -1,10 +1,21 @@
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
+use chrono::NaiveDate;
 use clap::Parser;
+use globset::{Glob, GlobSetBuilder};
+use tokio::task::JoinSet;
+use tokio::time::Instant;
+use url::Url;
+use walkdir::WalkDir;
 
+use crate::archive::{Archive, NoFix};
 use crate::check::Verdict;
-use crate::extract::Link;
+use crate::config::Config;
+use crate::extract::{Link, Page};
+use crate::report::Summary;
 
 pub mod archive;
 pub mod check;
@@ -53,12 +64,217 @@ pub struct Args {
 /// Runs the main flow and returns the process exit code.
 #[must_use]
 pub fn run(args: Args) -> ExitCode {
-    let _config = match config::load(&args.site_dir) {
-        Ok(config) => config,
+    let cfg = match config::load(&args.site_dir) {
+        Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("rotguard: {err}");
             return ExitCode::from(2);
         }
     };
-    ExitCode::SUCCESS
+    let pages = match read_pages(&args.site_dir, &cfg) {
+        Ok(pages) => pages,
+        Err(message) => {
+            eprintln!("rotguard: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("rotguard: starting runtime: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    let (findings, summary) = runtime.block_on(check_pages(&pages, &cfg));
+    // Hung requests must not hold the process past the deadline.
+    runtime.shutdown_background();
+    println!("{}", report::render(&findings, &summary));
+    exit_code(&findings, args.strict)
+}
+
+/// Reads and extracts every content file under `site_dir`, sorted by path.
+fn read_pages(site_dir: &Path, cfg: &Config) -> Result<Vec<(PathBuf, Page)>, String> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in &cfg.content {
+        let glob = Glob::new(pattern).map_err(|err| format!("content glob {pattern:?}: {err}"))?;
+        builder.add(glob);
+    }
+    let globs = builder
+        .build()
+        .map_err(|err| format!("content globs: {err}"))?;
+
+    let mut files = Vec::new();
+    for entry in WalkDir::new(site_dir) {
+        let entry = entry.map_err(|err| format!("walking {}: {err}", site_dir.display()))?;
+        let Ok(relative) = entry.path().strip_prefix(site_dir) else {
+            continue;
+        };
+        if entry.file_type().is_file() && globs.is_match(relative) {
+            files.push(relative.to_path_buf());
+        }
+    }
+    files.sort();
+
+    files
+        .into_iter()
+        .map(|relative| {
+            let full = site_dir.join(&relative);
+            let text = std::fs::read_to_string(&full)
+                .map_err(|err| format!("reading {}: {err}", full.display()))?;
+            let page = extract::extract(&relative, &text, cfg);
+            Ok((relative, page))
+        })
+        .collect()
+}
+
+/// A link that survived the external and `ignore` filters.
+struct Occurrence<'a> {
+    file: &'a Path,
+    date: Option<NaiveDate>,
+    link: &'a Link,
+    /// The link's URL without its fragment.
+    url: Url,
+}
+
+async fn check_pages(pages: &[(PathBuf, Page)], cfg: &Config) -> (Vec<Finding>, Summary) {
+    let site_host = cfg.site_url.host_str();
+    let mut occurrences = Vec::new();
+    let mut ignored = HashSet::new();
+    for (file, page) in pages {
+        for link in &page.links {
+            let Ok(mut url) = Url::parse(&link.url) else {
+                continue;
+            };
+            url.set_fragment(None);
+            if url.host_str() == site_host {
+                continue;
+            }
+            if cfg.ignore.iter().any(|re| re.is_match(&link.url)) {
+                ignored.insert(url);
+                continue;
+            }
+            occurrences.push(Occurrence {
+                file,
+                date: page.date,
+                link,
+                url,
+            });
+        }
+    }
+
+    let mut distinct: Vec<Url> = occurrences.iter().map(|o| o.url.clone()).collect();
+    distinct.sort();
+    distinct.dedup();
+
+    let deadline = Instant::now() + cfg.deadline;
+    let verdicts = check::check_all(distinct.clone(), cfg, deadline).await;
+
+    let run_date = chrono::Local::now().date_naive();
+    let lookups: HashSet<(Url, NaiveDate)> = occurrences
+        .iter()
+        .filter(|o| {
+            matches!(
+                verdicts.get(&o.url),
+                Some(Verdict::Dead { .. } | Verdict::Suspect { .. })
+            )
+        })
+        .map(|o| (o.url.clone(), o.date.unwrap_or(run_date)))
+        .collect();
+    let snapshots = look_up_snapshots(lookups, cfg, deadline).await;
+
+    let mut findings = Vec::new();
+    for occ in &occurrences {
+        let Some(verdict) = verdicts.get(&occ.url) else {
+            continue;
+        };
+        let fragment = fragment_of(&occ.link.url);
+        let fix = match verdict {
+            Verdict::Ok { .. } => continue,
+            Verdict::Permanent { fix, .. } => {
+                let mut fix = fix.clone();
+                if fix.fragment().is_none() {
+                    fix.set_fragment(fragment);
+                }
+                Fix::Proposed(fix.to_string())
+            }
+            Verdict::Dead { .. } | Verdict::Suspect { .. } => {
+                let key = (occ.url.clone(), occ.date.unwrap_or(run_date));
+                match snapshots.get(&key) {
+                    Some(Ok(snapshot)) => {
+                        let mut snapshot = snapshot.clone();
+                        snapshot.set_fragment(fragment);
+                        Fix::Proposed(snapshot.to_string())
+                    }
+                    Some(Err(reason)) => Fix::Manual(reason.to_string()),
+                    None => Fix::Manual(NoFix::Deadline.to_string()),
+                }
+            }
+            Verdict::Temporary { .. } | Verdict::Unverifiable { .. } => Fix::None,
+        };
+        findings.push(Finding {
+            file: occ.file.to_path_buf(),
+            link: occ.link.clone(),
+            verdict: verdict.clone(),
+            fix,
+        });
+    }
+
+    let mut summary = Summary {
+        checked: distinct.len(),
+        ignored: ignored.len(),
+        ..Summary::default()
+    };
+    for verdict in distinct.iter().filter_map(|url| verdicts.get(url)) {
+        let count = match verdict {
+            Verdict::Ok { .. } => &mut summary.ok,
+            Verdict::Permanent { .. } => &mut summary.permanent,
+            Verdict::Temporary { .. } => &mut summary.temporary,
+            Verdict::Dead { .. } => &mut summary.dead,
+            Verdict::Suspect { .. } => &mut summary.suspect,
+            Verdict::Unverifiable { .. } => &mut summary.unverifiable,
+        };
+        *count += 1;
+    }
+    (findings, summary)
+}
+
+/// The fragment of a link as written, if it has one.
+fn fragment_of(link: &str) -> Option<&str> {
+    link.split_once('#').map(|(_, fragment)| fragment)
+}
+
+/// Looks up all snapshots concurrently; the archive's own gate spaces the requests.
+async fn look_up_snapshots(
+    lookups: HashSet<(Url, NaiveDate)>,
+    cfg: &Config,
+    deadline: Instant,
+) -> HashMap<(Url, NaiveDate), Result<Url, NoFix>> {
+    let archive = Arc::new(Archive::new(cfg));
+    let mut tasks = JoinSet::new();
+    for (url, date) in lookups {
+        let archive = Arc::clone(&archive);
+        tasks.spawn(async move {
+            let result = archive.snapshot(&url, date, deadline).await;
+            ((url, date), result)
+        });
+    }
+    let mut snapshots = HashMap::new();
+    while let Some(joined) = tasks.join_next().await {
+        // A panicked lookup leaves its key absent, which the caller reports as a deadline.
+        if let Ok((key, result)) = joined {
+            snapshots.insert(key, result);
+        }
+    }
+    snapshots
+}
+
+fn exit_code(findings: &[Finding], strict: bool) -> ExitCode {
+    let unfixed = findings.iter().any(|finding| match finding.verdict {
+        Verdict::Dead { .. } | Verdict::Permanent { .. } | Verdict::Suspect { .. } => {
+            !matches!(finding.fix, Fix::Applied(_))
+        }
+        Verdict::Temporary { .. } | Verdict::Unverifiable { .. } => strict,
+        Verdict::Ok { .. } => false,
+    });
+    ExitCode::from(u8::from(unfixed))
 }

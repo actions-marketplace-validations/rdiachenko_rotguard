@@ -59,7 +59,6 @@ async fn s3_extracts_every_link_form_with_lines() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn s4_extracts_yaml_front_matter_links() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/y", page("Y", "yes"))).await;
@@ -79,7 +78,6 @@ async fn s4_extracts_yaml_front_matter_links() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S5"]
 async fn s5_skips_urls_in_code() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/live", page("Live", "alive")))
@@ -113,7 +111,6 @@ async fn s5_skips_urls_in_code() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn s6_checks_only_external_unignored_urls() {
     let mut w = World::new().await;
     w.configure(|s| s.ignore = vec!["/skip/".to_owned()]);
@@ -165,7 +162,6 @@ async fn s39_bare_url_keeps_parens_and_shortcode_src() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S40"]
 async fn s40_skips_non_http_and_internal_destinations() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/p", page("P", "p"))).await;

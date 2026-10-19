@@ -13,7 +13,6 @@ fn dated(date: &str, body: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S25"]
 async fn s25_latest_capture_before_page_date_wins() {
     let w = World::new().await;
     w.serve(gone_routes()).await;
@@ -45,7 +44,6 @@ async fn s25_latest_capture_before_page_date_wins() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S26"]
 async fn s26_earliest_capture_after_page_date_when_none_before() {
     let w = World::new().await;
     w.serve(gone_routes()).await;
@@ -72,7 +70,6 @@ async fn s26_earliest_capture_after_page_date_when_none_before() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S27"]
 async fn s27_lookup_per_url_and_page_date() {
     let w = World::new().await;
     w.serve(gone_routes()).await;
@@ -117,7 +114,6 @@ async fn s27_lookup_per_url_and_page_date() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S28"]
 async fn s28_no_capture_is_manual_fix() {
     let w = World::new().await;
     w.serve(gone_routes()).await;
@@ -139,7 +135,6 @@ async fn s28_no_capture_is_manual_fix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S29"]
 async fn s29_archive_down_is_three_attempts_then_manual_fix() {
     let w = World::new().await;
     w.serve(gone_routes()).await;
@@ -168,7 +163,6 @@ async fn s29_archive_down_is_three_attempts_then_manual_fix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S30"]
 async fn s30_archive_requests_are_spaced() {
     let mut w = World::new().await;
     w.configure(|s| s.archive_interval_ms = 300);
@@ -202,7 +196,6 @@ async fn s30_archive_requests_are_spaced() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S44"]
 async fn s44_deadline_covers_archive_lookups() {
     let mut w = World::new().await;
     w.configure(|s| {

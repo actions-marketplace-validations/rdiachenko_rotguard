@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use crate::support::{Capture, Cdx, Routes, Summary, World, page, redirect, status};
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S32"]
 async fn s32_dry_run_changes_no_file() {
     let w = World::new().await;
     w.serve(
