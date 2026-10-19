@@ -52,13 +52,16 @@ async fn s33_apply_rewrites_only_fixable_spans() {
     )
     .await;
     let gone = w.url("/gone");
-    w.archive(Cdx::new(vec![Capture::of("20200101000000", &gone)]));
+    let suspect = w.url("/deep/page");
+    w.archive(Cdx::new(vec![
+        Capture::of("20200101000000", &gone),
+        Capture::of("20200101000000", &suspect),
+    ]));
     let base = w.base.clone();
     let doc = |old: &str, dead: &str| {
         format!(
-            "+++\ntitle = \"Post\"\n+++\n\n\
+            "+++\ntitle = \"Post\"\nsource = '{dead}'\n+++\n\n\
              [a]({old}) one\n\n\
-             [b]({dead}) two\n\n\
              [c]({base}/deep/page) three\n\n\
              [d]({base}/t1) four\n"
         )
@@ -75,6 +78,8 @@ async fn s33_apply_rewrites_only_fixable_spans() {
         suspect: 1,
         ..Summary::default()
     });
+    let detail = out.entry(&suspect).detail.expect("suspect detail");
+    assert!(detail.starts_with("fix: "), "{detail}");
     let expected = doc(&w.url("/new"), &w.snapshot_url("20200101000000", "/gone"));
     let after = w.site.read("post.md");
     assert_eq!(after, expected);

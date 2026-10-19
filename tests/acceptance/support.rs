@@ -230,10 +230,6 @@ impl Capture {
     }
 
     /// The same capture, archived with another HTTP status.
-    #[expect(
-        dead_code,
-        reason = "no scenario's Given includes a non-200 capture; the mock still models one"
-    )]
     pub fn with_status(mut self, status: u16) -> Self {
         self.status = status;
         self

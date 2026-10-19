@@ -97,6 +97,11 @@ async fn s18_similar_body_marks_suspect() {
         entry.verdict.to_lowercase().contains("similar"),
         "reason should name body similarity: {entry:?}"
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        suspect: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -126,6 +131,11 @@ async fn s19_not_found_title_marks_suspect() {
         entry.verdict.to_lowercase().contains("not found"),
         "reason should name the title phrase: {entry:?}"
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        suspect: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]

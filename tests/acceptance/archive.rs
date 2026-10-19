@@ -20,6 +20,7 @@ async fn s25_latest_capture_before_page_date_wins() {
     let gone = w.url("/gone");
     w.archive(Cdx::new(vec![
         Capture::of("20200101000000", &gone),
+        Capture::of("20210101000000", &gone).with_status(404),
         Capture::of("20220101000000", &gone),
     ]));
     w.site
@@ -36,6 +37,11 @@ async fn s25_latest_capture_before_page_date_wins() {
             w.snapshot_url("20200101000000", "/gone")
         ))
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        dead: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -58,6 +64,11 @@ async fn s26_earliest_capture_after_page_date_when_none_before() {
             w.snapshot_url("20220101000000", "/gone")
         ))
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        dead: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -98,6 +109,11 @@ async fn s27_lookup_per_url_and_page_date() {
             w.snapshot_url("20230101000000", "/gone")
         ))
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        dead: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -115,6 +131,11 @@ async fn s28_no_capture_is_manual_fix() {
         entry.detail.as_deref(),
         Some("manual fix: no archived copy")
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        dead: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -139,6 +160,11 @@ async fn s29_archive_down_is_three_attempts_then_manual_fix() {
         "archive requests: {:?}",
         w.alog.all()
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        dead: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -201,4 +227,9 @@ async fn s44_deadline_covers_archive_lookups() {
     let entry = out.entry(&gone);
     assert!(entry.verdict.starts_with("DEAD"), "{entry:?}");
     assert_eq!(entry.detail.as_deref(), Some("manual fix: deadline"));
+    out.assert_summary(Summary {
+        checked: 1,
+        dead: 1,
+        ..Summary::default()
+    });
 }

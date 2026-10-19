@@ -68,7 +68,7 @@ async fn s8_starts_requests_to_a_host_one_interval_apart() {
 async fn s8_requests_to_a_host_do_not_overlap() {
     let mut w = World::new().await;
     w.configure(|s| s.host_interval_ms = 300);
-    let delay = Duration::from_millis(350);
+    let delay = Duration::from_millis(700);
     let routes = ["/p1", "/p2", "/p3"]
         .into_iter()
         .fold(Routes::new(), |r, p| {
@@ -189,6 +189,11 @@ async fn s12_permanent_redirect_proposes_target_with_fragment() {
     let entry = out.entry(&w.url("/old"));
     assert_eq!(entry.verdict, "PERMANENT REDIRECT 301 200");
     assert_eq!(entry.detail, Some(format!("fix: {}#sec", w.url("/new"))));
+    out.assert_summary(Summary {
+        checked: 1,
+        permanent: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -209,6 +214,11 @@ async fn s13_fix_is_last_permanent_hop_of_leading_run() {
     let entry = out.entry(&w.url("/p1"));
     assert!(entry.verdict.starts_with("PERMANENT REDIRECT"), "{entry:?}");
     assert_eq!(entry.detail, Some(format!("fix: {}", w.url("/p2"))));
+    out.assert_summary(Summary {
+        checked: 1,
+        permanent: 1,
+        ..Summary::default()
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -262,6 +272,10 @@ async fn s15_redirect_to_root_is_suspect_not_permanent() {
 
     let entry = out.entry(&w.url("/deep/page"));
     assert_eq!(entry.verdict, "SUSPECT redirect to root");
+    assert_eq!(
+        entry.detail.as_deref(),
+        Some("manual fix: no archived copy")
+    );
     assert!(
         !out.stdout.contains("PERMANENT REDIRECT"),
         "stdout:\n{}",
@@ -296,6 +310,11 @@ async fn s43_temporary_redirect_to_root_is_suspect() {
         "stdout:\n{}",
         out.stdout
     );
+    out.assert_summary(Summary {
+        checked: 1,
+        suspect: 1,
+        ..Summary::default()
+    });
     out.assert_code(1);
 }
 
