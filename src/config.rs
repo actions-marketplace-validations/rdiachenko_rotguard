@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use regex::Regex;
+use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use url::Url;
 
@@ -27,6 +28,8 @@ pub enum ConfigError {
         pattern: String,
         source: regex::Error,
     },
+    /// `user_agent` cannot be sent as an HTTP header value.
+    UserAgent { value: String },
 }
 
 impl fmt::Display for ConfigError {
@@ -40,6 +43,10 @@ impl fmt::Display for ConfigError {
                     "invalid {FILE_NAME}: bad regex in `ignore` ({pattern:?}): {source}"
                 )
             }
+            Self::UserAgent { value } => write!(
+                f,
+                "invalid {FILE_NAME}: `user_agent` ({value:?}) is not a valid HTTP header value"
+            ),
         }
     }
 }
@@ -50,6 +57,7 @@ impl Error for ConfigError {
             Self::Read { source, .. } => Some(source),
             Self::Parse(source) => Some(source),
             Self::Ignore { source, .. } => Some(source),
+            Self::UserAgent { .. } => None,
         }
     }
 }
@@ -173,6 +181,11 @@ impl TryFrom<Raw> for Config {
     type Error = ConfigError;
 
     fn try_from(raw: Raw) -> Result<Self, ConfigError> {
+        if HeaderValue::from_str(&raw.user_agent).is_err() {
+            return Err(ConfigError::UserAgent {
+                value: raw.user_agent,
+            });
+        }
         let ignore = raw
             .ignore
             .into_iter()
@@ -294,6 +307,19 @@ soft404 = false
 
         assert!(matches!(err, ConfigError::Ignore { .. }));
         assert!(err.to_string().contains("ignore"), "{err}");
+    }
+
+    #[test]
+    fn unsendable_user_agent_names_the_field() {
+        for ua in ["rotguard\\u0001", "a\\nb"] {
+            let err = parse(&format!(
+                "site_url = \"https://site.test\"\nuser_agent = \"{ua}\"\n"
+            ))
+            .unwrap_err();
+
+            assert!(matches!(err, ConfigError::UserAgent { .. }), "{err}");
+            assert!(err.to_string().contains("user_agent"), "{err}");
+        }
     }
 
     #[test]
