@@ -341,56 +341,6 @@ soft404 = false
     }
 
     #[test]
-    fn host_keys_differing_only_in_case_are_rejected() {
-        let err =
-            parse("site_url = \"https://site.test\"\n[hosts.\"A.test\"]\n[hosts.\"a.test\"]\n")
-                .unwrap_err();
-
-        assert!(
-            matches!(&err, ConfigError::DuplicateHost { host } if host == "a.test"),
-            "{err}"
-        );
-        assert!(err.to_string().contains("a.test"), "{err}");
-    }
-
-    #[test]
-    fn deadline_above_one_day_is_rejected() {
-        // i64::MAX is the largest integer TOML can hold.
-        for value in ["86401", "9223372036854775807"] {
-            let err = parse(&format!(
-                "site_url = \"https://site.test\"\ndeadline_s = {value}\n"
-            ))
-            .unwrap_err();
-
-            assert!(
-                matches!(err, ConfigError::Deadline { .. }),
-                "{value}: {err}"
-            );
-            assert!(err.to_string().contains("deadline_s"), "{value}: {err}");
-        }
-    }
-
-    #[test]
-    fn non_http_or_hostless_urls_are_rejected() {
-        for (field, text) in [
-            ("site_url", "site_url = \"file:///x\"\n"),
-            ("site_url", "site_url = \"data:text/plain,x\"\n"),
-            (
-                "archive_url",
-                "site_url = \"https://site.test\"\narchive_url = \"ftp://a.test\"\n",
-            ),
-        ] {
-            let err = parse(text).unwrap_err();
-
-            assert!(
-                matches!(&err, ConfigError::Url { field: f, .. } if *f == field),
-                "{text}: {err}"
-            );
-            assert!(err.to_string().contains(field), "{text}: {err}");
-        }
-    }
-
-    #[test]
     fn deadline_of_one_day_is_accepted() {
         let cfg =
             parse("site_url = \"https://site.test\"\ndeadline_s = 86400\n").expect("config parses");
@@ -399,44 +349,60 @@ soft404 = false
     }
 
     #[test]
-    fn unknown_key_is_rejected() {
-        let err = parse("site_url = \"https://site.test\"\nbogus = 1\n").unwrap_err();
+    fn rejected_configs_name_the_variant_and_the_field() {
+        // (config text, `ConfigError` variant, text the error chain must contain).
+        // i64::MAX is the largest integer TOML can hold.
+        let cases = [
+            (
+                "site_url = \"https://site.test\"\n[hosts.\"A.test\"]\n[hosts.\"a.test\"]\n",
+                "DuplicateHost",
+                "a.test",
+            ),
+            (
+                "site_url = \"https://site.test\"\ndeadline_s = 86401\n",
+                "Deadline",
+                "deadline_s",
+            ),
+            (
+                "site_url = \"https://site.test\"\ndeadline_s = 9223372036854775807\n",
+                "Deadline",
+                "deadline_s",
+            ),
+            (
+                "site_url = \"https://site.test\"\narchive_url = \"ftp://a.test\"\n",
+                "Url",
+                "`archive_url`",
+            ),
+            (
+                "site_url = \"https://site.test\"\nignore = [\"(\"]\n",
+                "Ignore",
+                "ignore",
+            ),
+            (
+                "site_url = \"https://site.test\"\nuser_agent = \"rotguard\\u0001\"\n",
+                "UserAgent",
+                "user_agent",
+            ),
+            (
+                "site_url = \"https://site.test\"\nuser_agent = \"a\\nb\"\n",
+                "UserAgent",
+                "user_agent",
+            ),
+            (
+                "site_url = \"https://site.test\"\nbogus = 1\n",
+                "Parse",
+                "bogus",
+            ),
+            ("site_url = \"file:///x\"\n", "Url", "`site_url`"),
+            ("site_url = \"data:text/plain,x\"\n", "Url", "`site_url`"),
+            ("site_url = 42\n", "Parse", "site_url"),
+            ("date_key = \"d\"\n", "Parse", "site_url"),
+        ];
+        for (text, variant, needle) in cases {
+            let err = parse(text).unwrap_err();
 
-        assert!(crate::chain(&err).contains("bogus"), "{err}");
-    }
-
-    #[test]
-    fn non_string_site_url_names_the_field() {
-        let err = parse("site_url = 42\n").unwrap_err();
-
-        assert!(crate::chain(&err).contains("site_url"), "{err}");
-    }
-
-    #[test]
-    fn missing_site_url_names_the_field() {
-        let err = parse("date_key = \"d\"\n").unwrap_err();
-
-        assert!(crate::chain(&err).contains("site_url"), "{err}");
-    }
-
-    #[test]
-    fn bad_ignore_regex_names_the_field() {
-        let err = parse("site_url = \"https://site.test\"\nignore = [\"(\"]\n").unwrap_err();
-
-        assert!(matches!(err, ConfigError::Ignore { .. }));
-        assert!(err.to_string().contains("ignore"), "{err}");
-    }
-
-    #[test]
-    fn unsendable_user_agent_names_the_field() {
-        for ua in ["rotguard\\u0001", "a\\nb"] {
-            let err = parse(&format!(
-                "site_url = \"https://site.test\"\nuser_agent = \"{ua}\"\n"
-            ))
-            .unwrap_err();
-
-            assert!(matches!(err, ConfigError::UserAgent { .. }), "{err}");
-            assert!(err.to_string().contains("user_agent"), "{err}");
+            assert!(format!("{err:?}").starts_with(variant), "{text}: {err:?}");
+            assert!(crate::chain(&err).contains(needle), "{text}: {err}");
         }
     }
 
