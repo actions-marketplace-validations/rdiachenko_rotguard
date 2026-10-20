@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
-use std::io;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::check::Verdict;
@@ -98,9 +99,15 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     let mut name: OsString = path.file_name().unwrap_or_default().to_owned();
     name.push(".rotguard.tmp");
     let tmp = path.with_file_name(name);
-    let result = std::fs::write(&tmp, text)
-        .and_then(|()| std::fs::set_permissions(&tmp, std::fs::metadata(path)?.permissions()))
-        .and_then(|()| std::fs::rename(&tmp, path));
+    // `create_new` fails on any existing path, a planted symlink included, so
+    // a failed open means the path isn't ours and must stay.
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.set_permissions(std::fs::metadata(path)?.permissions()))
+        .and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
         // Best effort: the write error is the one worth reporting.
         let _ = std::fs::remove_file(&tmp);
@@ -478,5 +485,30 @@ mod tests {
         )];
         assert!(apply(dir.path(), &mut findings).is_err());
         assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn planted_temp_symlink_is_not_followed_or_removed() {
+        let text = format!("[a]({OLD_A})\n");
+        let dir = site(&text);
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+        let tmp = dir.path().join("post.md.rotguard.tmp");
+        std::os::unix::fs::symlink(&victim, &tmp).unwrap();
+        let mut findings = vec![finding(
+            &text,
+            OLD_A,
+            "https://a.test/new",
+            permanent(),
+            Ctx::MdDest,
+        )];
+        assert!(apply(dir.path(), &mut findings).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert_eq!(std::fs::read_link(&tmp).unwrap(), victim);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
+            text
+        );
     }
 }
