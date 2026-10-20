@@ -7,7 +7,6 @@
 - [P2] `deadline_s` is unbounded, so `Instant + deadline` can overflow and panic; bound it or use `checked_add` — src/config.rs:116 — from whittle/link-health, 2026-10-19
 - [P2] `ConfigError` is public but not `#[non_exhaustive]` — src/config.rs:20 — from whittle/link-health, 2026-10-19
 - [P2] `ConfigError` prints its source in `Display` and also returns it from `source()`, so chain reporters print it twice — src/config.rs:35 — from whittle/link-health, 2026-10-19
-- [P2] `[hosts]` keys keep their case, but `Url::host_str()` is lowercase, so `[hosts."GoodReads.com"]` never matches (R13); lowercase the keys — src/config.rs:118 — from whittle/link-health, 2026-10-19
 - [P2] A YAML value that is only an anchor or tag (`a: &x`, `a: !foo`) makes the lexer skip the nested block, so its URLs fall back to non-verbatim whole-block spans — src/extract.rs:421 — from whittle/link-health, 2026-10-19
 - [P2] Temporary resolver failures (EAI_AGAIN, "temporary failure in name resolution") map to `Dns`, which R7 makes DEAD; consider mapping them to `Connect` (unverifiable). The design accepts the local-DNS-outage case as-is, so this is a design change — src/check.rs:204 — from whittle/link-health, 2026-10-19
 - [P2] No unit test covers `FetchError::Dns`; it needs a resolver failure that doesn't use the network — src/check.rs — from whittle/link-health, 2026-10-19

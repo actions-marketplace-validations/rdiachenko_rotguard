@@ -30,6 +30,8 @@ pub enum ConfigError {
     },
     /// `user_agent` cannot be sent as an HTTP header value.
     UserAgent { value: String },
+    /// Two `[hosts]` keys are equal once lowercased; `host` is the lowercased name.
+    DuplicateHost { host: String },
 }
 
 impl fmt::Display for ConfigError {
@@ -47,6 +49,10 @@ impl fmt::Display for ConfigError {
                 f,
                 "invalid {FILE_NAME}: `user_agent` ({value:?}) is not a valid HTTP header value"
             ),
+            Self::DuplicateHost { host } => write!(
+                f,
+                "invalid {FILE_NAME}: `[hosts]` lists {host:?} more than once (keys ignore case)"
+            ),
         }
     }
 }
@@ -57,7 +63,7 @@ impl Error for ConfigError {
             Self::Read { source, .. } => Some(source),
             Self::Parse(source) => Some(source),
             Self::Ignore { source, .. } => Some(source),
-            Self::UserAgent { .. } => None,
+            Self::UserAgent { .. } | Self::DuplicateHost { .. } => None,
         }
     }
 }
@@ -193,6 +199,14 @@ impl TryFrom<Raw> for Config {
                 Regex::new(&pattern).map_err(|source| ConfigError::Ignore { pattern, source })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let mut hosts = HashMap::with_capacity(raw.hosts.len());
+        for (name, host) in raw.hosts {
+            let name = name.to_ascii_lowercase();
+            if hosts.contains_key(&name) {
+                return Err(ConfigError::DuplicateHost { host: name });
+            }
+            hosts.insert(name, host);
+        }
         Ok(Self {
             site_url: raw.site_url,
             content: raw.content,
@@ -206,7 +220,7 @@ impl TryFrom<Raw> for Config {
             recheck_delay: Duration::from_millis(raw.recheck_delay_ms),
             timeout: Duration::from_millis(raw.timeout_ms),
             deadline: Duration::from_secs(raw.deadline_s),
-            hosts: raw.hosts,
+            hosts,
         })
     }
 }
@@ -278,6 +292,29 @@ soft404 = false
         assert_eq!(cfg.host_interval, Duration::from_millis(300));
         assert!(!cfg.hosts["goodreads.com"].soft404);
         assert!(cfg.hosts["other.test"].soft404);
+    }
+
+    #[test]
+    fn host_keys_are_lowercased() {
+        let cfg =
+            parse("site_url = \"https://site.test\"\n[hosts.\"GoodReads.com\"]\nsoft404 = false\n")
+                .expect("config parses");
+
+        assert!(!cfg.hosts["goodreads.com"].soft404);
+        assert!(!cfg.hosts.contains_key("GoodReads.com"));
+    }
+
+    #[test]
+    fn host_keys_differing_only_in_case_are_rejected() {
+        let err =
+            parse("site_url = \"https://site.test\"\n[hosts.\"A.test\"]\n[hosts.\"a.test\"]\n")
+                .unwrap_err();
+
+        assert!(
+            matches!(&err, ConfigError::DuplicateHost { host } if host == "a.test"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("a.test"), "{err}");
     }
 
     #[test]
