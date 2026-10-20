@@ -795,83 +795,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn self_redirect_is_a_loop() {
-        let server = MockServer::start().await;
-        Mock::given(path("/x"))
-            .respond_with(redirect(302, "/x"))
-            .mount(&server)
-            .await;
-        let err = fetcher("host_interval_ms = 0")
-            .fetch(&url(&server, "/x"))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, FetchError::Loop(ref c) if c.len() == 1),
-            "{err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn redirect_without_location_is_reported() {
-        let server = MockServer::start().await;
-        Mock::given(path("/x"))
-            .respond_with(ResponseTemplate::new(302))
-            .mount(&server)
-            .await;
-        let err = fetcher("host_interval_ms = 0")
-            .fetch(&url(&server, "/x"))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, FetchError::NoLocation(ref c) if c.len() == 1),
-            "{err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn eleven_redirects_are_too_many() {
-        let server = MockServer::start().await;
-        for i in 0..11 {
-            Mock::given(path(format!("/h{i}")))
-                .respond_with(redirect(302, &format!("/h{}", i + 1)))
-                .mount(&server)
-                .await;
-        }
-        Mock::given(path("/h11"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-        let err = fetcher("host_interval_ms = 0")
-            .fetch(&url(&server, "/h0"))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, FetchError::TooManyHops(ref c) if c.len() == 11),
-            "{err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn ten_redirects_still_succeed() {
-        let server = MockServer::start().await;
-        for i in 0..10 {
-            Mock::given(path(format!("/h{i}")))
-                .respond_with(redirect(302, &format!("/h{}", i + 1)))
-                .mount(&server)
-                .await;
-        }
-        Mock::given(path("/h10"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-        let got = fetcher("host_interval_ms = 0")
-            .fetch(&url(&server, "/h0"))
-            .await
-            .unwrap();
-        assert_eq!(got.chain.len(), 11);
-    }
-
-    #[tokio::test]
     async fn body_is_cut_at_256_kb() {
         let server = MockServer::start().await;
         Mock::given(path("/big"))
@@ -958,42 +881,96 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn non_ascii_location_is_followed() {
-        let server = MockServer::start().await;
-        Mock::given(path("/a"))
-            .respond_with(
-                ResponseTemplate::new(302).insert_header("Location", "/caf\u{e9}".as_bytes()),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(path("/caf%C3%A9"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-        let got = fetcher("host_interval_ms = 0")
-            .fetch(&url(&server, "/a"))
-            .await
-            .unwrap();
-        assert_eq!(got.chain.len(), 2);
-        assert_eq!(got.chain[1].status, 200);
-    }
+    /// Label, routes served, expected outcome kind, chain length and last status.
+    type RedirectCase<'a> = (
+        &'a str,
+        Vec<(String, ResponseTemplate)>,
+        &'a str,
+        usize,
+        Option<u16>,
+    );
 
     #[tokio::test]
-    async fn redirect_to_a_non_http_url_is_no_location() {
-        let server = MockServer::start().await;
-        Mock::given(path("/a"))
-            .respond_with(redirect(302, "mailto:someone"))
-            .mount(&server)
-            .await;
-        let err = fetcher("host_interval_ms = 0")
-            .fetch(&url(&server, "/a"))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, FetchError::NoLocation(ref c) if c.len() == 1),
-            "{err:?}"
-        );
+    async fn redirect_edge_cases_end_as_expected() {
+        let chain_of_302s = |count: usize| -> Vec<(String, ResponseTemplate)> {
+            let mut routes: Vec<_> = (0..count)
+                .map(|i| (format!("/h{i}"), redirect(302, &format!("/h{}", i + 1))))
+                .collect();
+            routes.push((format!("/h{count}"), ResponseTemplate::new(200)));
+            routes
+        };
+        // (label, routes served, expected (outcome, chain length, last status))
+        let cases: Vec<RedirectCase> = vec![
+            (
+                "self redirect is a loop",
+                vec![("/h0".to_owned(), redirect(302, "/h0"))],
+                "loop",
+                1,
+                None,
+            ),
+            (
+                "redirect without location",
+                vec![("/h0".to_owned(), ResponseTemplate::new(302))],
+                "no location",
+                1,
+                None,
+            ),
+            (
+                "redirect to a non-http url",
+                vec![("/h0".to_owned(), redirect(302, "mailto:someone"))],
+                "no location",
+                1,
+                None,
+            ),
+            (
+                "eleven redirects are too many",
+                chain_of_302s(11),
+                "too many",
+                11,
+                None,
+            ),
+            (
+                "ten redirects still succeed",
+                chain_of_302s(10),
+                "ok",
+                11,
+                Some(200),
+            ),
+            (
+                "non-ascii location is followed",
+                vec![
+                    (
+                        "/h0".to_owned(),
+                        ResponseTemplate::new(302)
+                            .insert_header("Location", "/caf\u{e9}".as_bytes()),
+                    ),
+                    ("/caf%C3%A9".to_owned(), ResponseTemplate::new(200)),
+                ],
+                "ok",
+                2,
+                Some(200),
+            ),
+        ];
+        for (name, routes, kind, hops, last) in cases {
+            let server = MockServer::start().await;
+            for (route, response) in routes {
+                Mock::given(path(route))
+                    .respond_with(response)
+                    .mount(&server)
+                    .await;
+            }
+            let outcome = fetcher("host_interval_ms = 0")
+                .fetch(&url(&server, "/h0"))
+                .await;
+            let got = match &outcome {
+                Ok(f) => ("ok", f.chain.len(), f.chain.last().map(|h| h.status)),
+                Err(FetchError::Loop(c)) => ("loop", c.len(), None),
+                Err(FetchError::NoLocation(c)) => ("no location", c.len(), None),
+                Err(FetchError::TooManyHops(c)) => ("too many", c.len(), None),
+                Err(other) => panic!("{name}: unexpected {other:?}"),
+            };
+            assert_eq!(got, (kind, hops, last), "{name}");
+        }
     }
 
     #[test]
@@ -1224,112 +1201,120 @@ mod tests {
         Ok(fetched)
     }
 
-    fn suspect(chain: &Result<Fetched, FetchError>) -> Verdict {
-        Verdict::Suspect {
-            chain: chain.as_ref().unwrap().chain.clone(),
-            reason: "redirect to root".to_owned(),
-        }
+    /// What a redirect chain should classify as; `Suspect` and `Permanent` borrow the chain.
+    enum Expect {
+        Suspect,
+        Permanent(Url),
+        Is(Verdict),
     }
 
-    #[test]
-    fn a_301_to_the_root_is_suspect() {
-        let outcome = chain_of(vec![deep_hop(301), root_hop(200)]);
-        assert_eq!(
-            classify(&outcome, &HostConfig::default()),
-            suspect(&outcome)
-        );
-    }
+    type RootCase<'a> = (&'a str, Result<Fetched, FetchError>, bool, Expect);
 
     #[test]
-    fn a_302_to_the_root_is_suspect_not_temporary() {
-        let outcome = chain_of(vec![deep_hop(302), root_hop(200)]);
-        assert_eq!(
-            classify(&outcome, &HostConfig::default()),
-            suspect(&outcome)
-        );
-    }
-
-    #[test]
-    fn a_redirect_to_the_root_is_permanent_when_soft404_is_off() {
-        let outcome = chain_of(vec![deep_hop(301), root_hop(200)]);
-        let off = HostConfig { soft404: false };
-        assert_eq!(
-            classify(&outcome, &off),
-            Verdict::Permanent {
-                chain: outcome.as_ref().unwrap().chain.clone(),
-                fix: root_hop(200).url,
-            }
-        );
-    }
-
-    #[test]
-    fn a_root_url_redirected_to_the_root_is_unaffected() {
-        let outcome = chain_of(vec![root_hop(301), root_hop(200)]);
-        assert!(matches!(
-            classify(&outcome, &HostConfig::default()),
-            Verdict::Permanent { .. }
-        ));
-    }
-
-    #[test]
-    fn a_redirect_to_the_root_that_ends_in_404_stays_dead() {
-        let outcome = chain_of(vec![deep_hop(301), root_hop(404)]);
-        assert_eq!(classify(&outcome, &HostConfig::default()), dead("404"));
-    }
-
-    #[test]
-    fn a_redirect_to_the_root_is_suspect_whatever_the_final_status() {
-        for (first, last) in [(301, 400), (302, 405)] {
-            let outcome = chain_of(vec![deep_hop(first), root_hop(last)]);
-            assert_eq!(
-                classify(&outcome, &HostConfig::default()),
-                suspect(&outcome),
-                "{first} -> {last}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_redirect_to_the_root_ending_in_400_is_unverifiable_when_soft404_is_off() {
-        let outcome = chain_of(vec![deep_hop(301), root_hop(400)]);
-        let off = HostConfig { soft404: false };
-        assert_eq!(classify(&outcome, &off), unverifiable("400"));
-    }
-
-    #[test]
-    fn a_failed_chain_through_the_root_is_suspect() {
-        let chain = vec![deep_hop(301), root_hop(301)];
-        for err in [
-            FetchError::Loop(chain.clone()),
-            FetchError::NoLocation(chain.clone()),
-            FetchError::TooManyHops(chain.clone()),
-        ] {
-            let outcome = Err(err.clone());
-            assert_eq!(
-                classify(&outcome, &HostConfig::default()),
-                Verdict::Suspect {
-                    chain: chain.clone(),
+    fn redirects_to_the_root_classify_by_soft404_and_final_status() {
+        let loop_chain = || vec![deep_hop(301), root_hop(301)];
+        let cases: Vec<RootCase> = vec![
+            (
+                "301 to the root",
+                chain_of(vec![deep_hop(301), root_hop(200)]),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "302 to the root is suspect, not temporary",
+                chain_of(vec![deep_hop(302), root_hop(200)]),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "permanent when soft404 is off",
+                chain_of(vec![deep_hop(301), root_hop(200)]),
+                false,
+                Expect::Permanent(root_hop(200).url),
+            ),
+            (
+                "a root url redirected to the root is unaffected",
+                chain_of(vec![root_hop(301), root_hop(200)]),
+                true,
+                Expect::Permanent(root_hop(200).url),
+            ),
+            (
+                "ending in 404 stays dead",
+                chain_of(vec![deep_hop(301), root_hop(404)]),
+                true,
+                Expect::Is(dead("404")),
+            ),
+            (
+                "301 -> 400",
+                chain_of(vec![deep_hop(301), root_hop(400)]),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "302 -> 405",
+                chain_of(vec![deep_hop(302), root_hop(405)]),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "ending in 400 is unverifiable when soft404 is off",
+                chain_of(vec![deep_hop(301), root_hop(400)]),
+                false,
+                Expect::Is(unverifiable("400")),
+            ),
+            (
+                "loop through the root",
+                Err(FetchError::Loop(loop_chain())),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "no location through the root",
+                Err(FetchError::NoLocation(loop_chain())),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "too many hops through the root",
+                Err(FetchError::TooManyHops(loop_chain())),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "failed chain through the root is unverifiable when soft404 is off",
+                Err(FetchError::Loop(loop_chain())),
+                false,
+                Expect::Is(unverifiable("redirect loop")),
+            ),
+            (
+                "failed chain that never visits the root",
+                Err(FetchError::Loop(vec![deep_hop(301), deep_hop(301)])),
+                true,
+                Expect::Is(unverifiable("redirect loop")),
+            ),
+        ];
+        for (name, outcome, soft404, expected) in cases {
+            let chain = match &outcome {
+                Ok(fetched) => fetched.chain.clone(),
+                Err(
+                    FetchError::Loop(c) | FetchError::NoLocation(c) | FetchError::TooManyHops(c),
+                ) => c.clone(),
+                Err(_) => Vec::new(),
+            };
+            let expected = match expected {
+                Expect::Suspect => Verdict::Suspect {
+                    chain,
                     reason: "redirect to root".to_owned(),
                 },
-                "{err}"
+                Expect::Permanent(fix) => Verdict::Permanent { chain, fix },
+                Expect::Is(verdict) => verdict,
+            };
+            assert_eq!(
+                classify(&outcome, &HostConfig { soft404 }),
+                expected,
+                "{name}"
             );
         }
-    }
-
-    #[test]
-    fn a_failed_chain_through_the_root_is_unverifiable_when_soft404_is_off() {
-        let off = HostConfig { soft404: false };
-        let outcome = Err(FetchError::Loop(vec![deep_hop(301), root_hop(301)]));
-        assert_eq!(classify(&outcome, &off), unverifiable("redirect loop"));
-    }
-
-    #[test]
-    fn a_failed_chain_that_never_visits_the_root_is_unverifiable() {
-        let outcome = Err(FetchError::Loop(vec![deep_hop(301), deep_hop(301)]));
-        assert_eq!(
-            classify(&outcome, &HostConfig::default()),
-            unverifiable("redirect loop")
-        );
     }
 
     fn config_for(extra: &str) -> Config {
@@ -1627,165 +1612,167 @@ mod tests {
         assert_eq!(token.len(), 24);
     }
 
-    #[tokio::test]
-    async fn a_probe_with_the_same_title_is_suspect() {
-        let server = MockServer::start().await;
-        mount(
-            &server,
-            "^/docs/real$",
-            page("Docs home", "alpha beta gamma delta"),
-        )
-        .await;
-        mount(
-            &server,
-            "^/docs/[a-z0-9]{24}$",
-            page("Docs home", "one two three four five"),
-        )
-        .await;
-        let u = url(&server, "/docs/real");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert_eq!(reason_of(&got[&u]), "probe: same title");
-    }
+    /// Label, routes, config, requested path, suspect reason (None for ok), request count.
+    type ProbeCase<'a> = (
+        &'a str,
+        Vec<(&'a str, ResponseTemplate)>,
+        &'a str,
+        &'a str,
+        Option<&'a str>,
+        Option<usize>,
+    );
 
     #[tokio::test]
-    async fn a_probe_ending_at_the_same_final_url_is_suspect() {
-        let server = MockServer::start().await;
-        let to_landing = || ResponseTemplate::new(302).insert_header("location", "/docs/landing");
-        mount(&server, "^/docs/real$", to_landing()).await;
-        mount(&server, "^/docs/[a-z0-9]{24}$", to_landing()).await;
-        mount(
-            &server,
-            "^/docs/landing$",
-            page("Landing", "alpha beta gamma delta"),
-        )
-        .await;
-        let u = url(&server, "/docs/real");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert_eq!(reason_of(&got[&u]), "probe: same final URL");
-    }
-
-    #[tokio::test]
-    async fn a_404_probe_with_the_pages_title_and_text_is_ignored() {
-        let server = MockServer::start().await;
-        let html = "<html><head><title>Docs home</title></head><body>alpha beta gamma delta epsilon zeta</body></html>";
-        mount(
-            &server,
-            "^/docs/real$",
-            page("Docs home", "alpha beta gamma delta epsilon zeta"),
-        )
-        .await;
-        mount(
-            &server,
-            "^/docs/[a-z0-9]{24}$",
-            ResponseTemplate::new(404).set_body_string(html),
-        )
-        .await;
-        let u = url(&server, "/docs/real");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
-    }
-
-    #[tokio::test]
-    async fn a_root_url_with_a_not_found_title_is_suspect_without_a_probe() {
-        let server = MockServer::start().await;
-        mount(&server, "^/$", page("Page not found", "sorry")).await;
-        let u = url(&server, "/");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert_eq!(reason_of(&got[&u]), "title says \"not found\"");
-        assert_eq!(gets(&server).await, 1);
-    }
-
-    #[tokio::test]
-    async fn a_similar_body_with_another_title_is_suspect() {
-        let server = MockServer::start().await;
-        let body: Vec<String> = (0..400).map(|i| format!("word{i}")).collect();
-        let body = body.join(" ");
-        mount(&server, "^/x/a$", page("Real", &body)).await;
-        mount(&server, "^/x/[a-z0-9]{24}$", page("Other", &body)).await;
-        let u = url(&server, "/x/a");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert_eq!(reason_of(&got[&u]), "probe: similar body");
-    }
-
-    #[tokio::test]
-    async fn a_not_found_title_with_a_200_probe_is_suspect() {
-        let server = MockServer::start().await;
-        mount(
-            &server,
-            "^/z/a$",
-            page("Page Not Found \u{2013} Example", "sorry"),
-        )
-        .await;
-        mount(
-            &server,
-            "^/z/[a-z0-9]{24}$",
+    async fn soft404_probe_verdicts() {
+        let landing = || ResponseTemplate::new(302).insert_header("location", "/docs/landing");
+        let docs_html = "<html><head><title>Docs home</title></head><body>alpha beta gamma delta epsilon zeta</body></html>";
+        let words = (0..400)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let not_found_page = || page("Page Not Found \u{2013} Example", "sorry");
+        let unrelated = || {
             page(
                 "Unrelated heading",
                 "completely different words appear here",
+            )
+        };
+        // (label, routes, config, requested path, expected suspect reason or None for ok,
+        // expected request count)
+        let cases: Vec<ProbeCase> = vec![
+            (
+                "probe with the same title",
+                vec![
+                    ("^/docs/real$", page("Docs home", "alpha beta gamma delta")),
+                    (
+                        "^/docs/[a-z0-9]{24}$",
+                        page("Docs home", "one two three four five"),
+                    ),
+                ],
+                "",
+                "/docs/real",
+                Some("probe: same title"),
+                None,
             ),
-        )
-        .await;
-        let u = url(&server, "/z/a");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert_eq!(reason_of(&got[&u]), "title says \"not found\"");
-    }
-
-    #[tokio::test]
-    async fn a_phrase_in_the_title_is_ignored_when_the_probe_is_404() {
-        let server = MockServer::start().await;
-        mount(
-            &server,
-            "^/w/a$",
-            page("404 errors explained", "an article"),
-        )
-        .await;
-        let u = url(&server, "/w/a");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
-    }
-
-    #[tokio::test]
-    async fn a_phrase_in_the_title_is_ignored_when_soft404_is_off() {
-        let server = MockServer::start().await;
-        mount(
-            &server,
-            "^/z/a$",
-            page("Page Not Found \u{2013} Example", "sorry"),
-        )
-        .await;
-        mount(
-            &server,
-            "^/z/[a-z0-9]{24}$",
-            page(
-                "Unrelated heading",
-                "completely different words appear here",
+            (
+                "probe ending at the same final url",
+                vec![
+                    ("^/docs/real$", landing()),
+                    ("^/docs/[a-z0-9]{24}$", landing()),
+                    ("^/docs/landing$", page("Landing", "alpha beta gamma delta")),
+                ],
+                "",
+                "/docs/real",
+                Some("probe: same final URL"),
+                None,
             ),
-        )
-        .await;
-        let u = url(&server, "/z/a");
-        let got = check_all(vec![u.clone()], &config_for(NO_PROBE), far()).await;
-        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
-    }
-
-    #[tokio::test]
-    async fn a_failed_probe_does_not_hide_a_not_found_title() {
-        let server = MockServer::start().await;
-        mount(&server, "^/z/a$", page("Not Found", "sorry")).await;
-        mount(&server, "^/z/[a-z0-9]{24}$", ResponseTemplate::new(500)).await;
-        let u = url(&server, "/z/a");
-        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
-        assert_eq!(reason_of(&got[&u]), "title says \"not found\"");
-    }
-
-    #[tokio::test]
-    async fn soft404_off_sends_no_probe() {
-        let server = MockServer::start().await;
-        mount(&server, "^/docs/real$", page("Docs home", "alpha")).await;
-        mount(&server, "^/docs/[a-z0-9]{24}$", page("Docs home", "alpha")).await;
-        let u = url(&server, "/docs/real");
-        let cfg = config_for("[hosts.\"127.0.0.1\"]\nsoft404 = false");
-        let got = check_all(vec![u.clone()], &cfg, far()).await;
-        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
-        assert_eq!(gets(&server).await, 1);
+            (
+                "404 probe with the page's title and text is ignored",
+                vec![
+                    (
+                        "^/docs/real$",
+                        page("Docs home", "alpha beta gamma delta epsilon zeta"),
+                    ),
+                    (
+                        "^/docs/[a-z0-9]{24}$",
+                        ResponseTemplate::new(404).set_body_string(docs_html),
+                    ),
+                ],
+                "",
+                "/docs/real",
+                None,
+                None,
+            ),
+            (
+                "root url with a not-found title needs no probe",
+                vec![("^/$", page("Page not found", "sorry"))],
+                "",
+                "/",
+                Some("title says \"not found\""),
+                Some(1),
+            ),
+            (
+                "similar body with another title",
+                vec![
+                    ("^/x/a$", page("Real", &words)),
+                    ("^/x/[a-z0-9]{24}$", page("Other", &words)),
+                ],
+                "",
+                "/x/a",
+                Some("probe: similar body"),
+                None,
+            ),
+            (
+                "not-found title with a 200 probe",
+                vec![
+                    ("^/z/a$", not_found_page()),
+                    ("^/z/[a-z0-9]{24}$", unrelated()),
+                ],
+                "",
+                "/z/a",
+                Some("title says \"not found\""),
+                None,
+            ),
+            (
+                "phrase in the title is ignored when the probe is 404",
+                vec![("^/w/a$", page("404 errors explained", "an article"))],
+                "",
+                "/w/a",
+                None,
+                None,
+            ),
+            (
+                "phrase in the title is ignored when soft404 is off",
+                vec![
+                    ("^/z/a$", not_found_page()),
+                    ("^/z/[a-z0-9]{24}$", unrelated()),
+                ],
+                NO_PROBE,
+                "/z/a",
+                None,
+                None,
+            ),
+            (
+                "failed probe does not hide a not-found title",
+                vec![
+                    ("^/z/a$", page("Not Found", "sorry")),
+                    ("^/z/[a-z0-9]{24}$", ResponseTemplate::new(500)),
+                ],
+                "",
+                "/z/a",
+                Some("title says \"not found\""),
+                None,
+            ),
+            (
+                "soft404 off sends no probe",
+                vec![
+                    ("^/docs/real$", page("Docs home", "alpha")),
+                    ("^/docs/[a-z0-9]{24}$", page("Docs home", "alpha")),
+                ],
+                NO_PROBE,
+                "/docs/real",
+                None,
+                Some(1),
+            ),
+        ];
+        for (name, routes, extra, target, reason, requests) in cases {
+            let server = MockServer::start().await;
+            for (route, response) in routes {
+                mount(&server, route, response).await;
+            }
+            let u = url(&server, target);
+            let got = check_all(vec![u.clone()], &config_for(extra), far()).await;
+            match reason {
+                Some(reason) => assert_eq!(reason_of(&got[&u]), reason, "{name}"),
+                None => assert!(
+                    matches!(got[&u], Verdict::Ok { .. }),
+                    "{name}: {:?}",
+                    got[&u]
+                ),
+            }
+            if let Some(requests) = requests {
+                assert_eq!(gets(&server).await, requests, "{name}");
+            }
+        }
     }
 }
