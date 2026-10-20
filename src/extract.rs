@@ -3,6 +3,7 @@
 //! Front matter values and markdown body links (inline links and images, reference
 //! definitions, autolinks and `href`/`src` in raw HTML) and bare URLs in text are covered.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -121,6 +122,10 @@ fn front_matter_links(
         Format::Toml => lex_toml(block_text),
         Format::Yaml => lex_yaml(block_text),
     };
+    // The lexer can emit a phantom token whose text equals a real value elsewhere, and
+    // pairing by text would let it take the verbatim span. When a URL has more matching
+    // tokens than values, no link for it is applied.
+    let ambiguous = ambiguous_urls(format, block_text, &tokens, &remaining);
     let mut unmatched = Vec::new();
     for token in tokens {
         let content = &block_text[token.content.clone()];
@@ -132,7 +137,7 @@ fn front_matter_links(
                 content,
                 span,
                 Ctx::FrontMatter { quote: token.quote },
-                true,
+                !ambiguous.contains(content),
             ));
         } else {
             unmatched.push(token);
@@ -172,6 +177,29 @@ fn front_matter_links(
             false,
         ));
     }
+}
+
+/// URLs that more lexer tokens match, raw or decoded, than the parser has values.
+fn ambiguous_urls(
+    format: Format,
+    block_text: &str,
+    tokens: &[Token],
+    urls: &[String],
+) -> HashSet<String> {
+    urls.iter()
+        .filter(|&url| {
+            let matching = tokens
+                .iter()
+                .filter(|token| {
+                    let content = &block_text[token.content.clone()];
+                    content == url.as_str()
+                        || decode(format, content, token.quote).is_some_and(|d| d == *url)
+                })
+                .count();
+            matching > urls.iter().filter(|u| *u == url).count()
+        })
+        .cloned()
+        .collect()
 }
 
 fn link(lines: &Lines, url: &str, span: Range<usize>, ctx: Ctx, verbatim: bool) -> Link {
@@ -933,6 +961,68 @@ mod tests {
                 assert_eq!(&text[l.span.clone()], l.url);
             }
         }
+    }
+
+    /// Asserts the URL is reported once, checked, and never verbatim inside `field`.
+    fn assert_phantom_not_applied(text: &str, field_start: &str, field_end: &str) {
+        let page = run(text);
+        let urls: Vec<_> = page
+            .links
+            .iter()
+            .filter(|l| l.url == "https://a.test/p")
+            .collect();
+        let start = text.find(field_start).expect("fixture has the field");
+        let end = start
+            + text[start..]
+                .find(field_end)
+                .expect("fixture ends the field");
+        assert!(
+            !page
+                .links
+                .iter()
+                .any(|l| l.verbatim && l.span.start >= start && l.span.end <= end),
+            "{text:?}: {:?}",
+            page.links
+        );
+        assert!(!urls.is_empty(), "{text:?}");
+        assert_slices(text, &page);
+    }
+
+    #[test]
+    fn phantom_token_after_property_only_entry_is_not_applied() {
+        for prop in ["&f", "!t", ""] {
+            let text = format!(
+                "---\nl:\n  - {prop}\n    https://a.test/p\n    more\n  - https://a.test/p\n---\n"
+            );
+            assert_phantom_not_applied(&text, "l:", "\n  - https://a.test/p\n---");
+            assert_eq!(run(&text).links.len(), 1, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn phantom_token_in_multiline_quoted_scalar_is_not_applied() {
+        for q in ['"', '\''] {
+            let text =
+                format!("---\na:\n  {q}x\n  https://a.test/p\n  y{q}\nb: https://a.test/p\n---\n");
+            assert_phantom_not_applied(&text, "a:", "\nb:");
+        }
+    }
+
+    #[test]
+    fn phantom_token_after_property_only_line_is_not_applied() {
+        let text = "---\na:\n  &x\n  https://a.test/p\n  more\nb: https://a.test/p\n---\n";
+        assert_phantom_not_applied(text, "a:", "\nb:");
+    }
+
+    #[test]
+    fn equal_urls_in_separate_fields_stay_verbatim() {
+        let text = "---\na: https://a.test/p\nb: https://a.test/p\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 2);
+        assert!(page.links.iter().all(|l| l.verbatim));
+        assert_eq!(page.links[0].line, 2);
+        assert_eq!(page.links[1].line, 3);
+        assert_slices(text, &page);
     }
 
     #[test]
