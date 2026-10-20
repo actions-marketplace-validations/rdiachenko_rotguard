@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use tokio::time::Instant;
 use url::Url;
 use walkdir::WalkDir;
 
+use crate::apply::Unwritable;
 use crate::archive::{Archive, NoFix};
 use crate::check::Verdict;
 use crate::config::Config;
@@ -41,10 +43,31 @@ pub enum Fix {
     None,
     /// A replacement URL, not yet written.
     Proposed(String),
-    /// Why no replacement could be found.
-    Manual(String),
+    /// Why no replacement could be written.
+    Manual(ManualReason),
     /// A replacement URL that was written to the site.
     Applied(String),
+}
+
+/// Why a fix needs a manual edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualReason {
+    /// No archived copy could be proposed.
+    Archive(NoFix),
+    /// The proposed URL cannot be written at the link's position.
+    Unwritable(Unwritable),
+    /// The file no longer holds the URL the run found.
+    ChangedDuringRun,
+}
+
+impl fmt::Display for ManualReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Archive(reason) => reason.fmt(f),
+            Self::Unwritable(reason) => reason.fmt(f),
+            Self::ChangedDuringRun => f.write_str("changed during run"),
+        }
+    }
 }
 
 /// Command-line arguments for `rotguard`.
@@ -212,8 +235,8 @@ async fn check_pages(pages: &[(PathBuf, Page)], cfg: &Config) -> (Vec<Finding>, 
                         snapshot.set_fragment(fragment);
                         Fix::Proposed(snapshot.to_string())
                     }
-                    Some(Err(reason)) => Fix::Manual(reason.to_string()),
-                    None => Fix::Manual(NoFix::Deadline.to_string()),
+                    Some(Err(reason)) => Fix::Manual(ManualReason::Archive(*reason)),
+                    None => Fix::Manual(ManualReason::Archive(NoFix::Deadline)),
                 }
             }
             Verdict::Temporary { .. } | Verdict::Unverifiable { .. } => Fix::None,

@@ -1,18 +1,20 @@
 //! Writing fixes into site files.
 
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::check::Verdict;
 use crate::extract::{Ctx, Link, Quote};
-use crate::{Finding, Fix};
+use crate::{Finding, Fix, ManualReason};
 
 /// Writes every proposed fix for permanent redirects and dead links into the site files.
 ///
 /// Fixes that cannot be written become `Fix::Manual`; a file whose spans no longer hold their
-/// original URL is left untouched and its fixes become `Manual("changed during run")`. Fixes
+/// original URL is left untouched and its fixes become `Manual(ChangedDuringRun)`. Fixes
 /// that were written become `Fix::Applied`. Each file is replaced atomically.
 ///
 /// # Errors
@@ -45,7 +47,7 @@ fn apply_file(path: &Path, findings: &mut [Finding], indices: Vec<usize>) -> io:
         };
         match writable(fix, &finding.link) {
             Ok(()) => edits.push(index),
-            Err(reason) => finding.fix = Fix::Manual(reason),
+            Err(reason) => finding.fix = Fix::Manual(ManualReason::Unwritable(reason)),
         }
     }
     if edits.is_empty() {
@@ -65,7 +67,7 @@ fn apply_file(path: &Path, findings: &mut [Finding], indices: Vec<usize>) -> io:
     });
     if !unchanged || overlapping {
         for index in edits {
-            findings[index].fix = Fix::Manual("changed during run".to_string());
+            findings[index].fix = Fix::Manual(ManualReason::ChangedDuringRun);
         }
         return Ok(());
     }
@@ -106,16 +108,35 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
+/// Why a fix cannot be written at a link's position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unwritable {
+    /// The source bytes differ from the link's URL.
+    NotVerbatim,
+    /// The fix cannot be written inside the link's delimiters.
+    CannotQuote,
+}
+
+impl fmt::Display for Unwritable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotVerbatim => "not verbatim",
+            Self::CannotQuote => "cannot quote",
+        })
+    }
+}
+
+impl Error for Unwritable {}
+
 /// Decides whether `fix` can be written at the position of `link`.
 ///
 /// # Errors
 ///
-/// Returns the reason the fix needs a manual edit: "not verbatim" when the
-/// source bytes differ from the link's URL, "cannot quote" when the fix cannot
-/// be written inside the link's delimiters.
-pub fn writable(fix: &str, link: &Link) -> Result<(), String> {
+/// Returns [`Unwritable::NotVerbatim`] when the source bytes differ from the link's URL,
+/// [`Unwritable::CannotQuote`] when the fix cannot be written inside the link's delimiters.
+pub fn writable(fix: &str, link: &Link) -> Result<(), Unwritable> {
     if !link.verbatim {
-        return Err("not verbatim".to_string());
+        return Err(Unwritable::NotVerbatim);
     }
     let quotable = match link.ctx {
         Ctx::FrontMatter {
@@ -130,7 +151,7 @@ pub fn writable(fix: &str, link: &Link) -> Result<(), String> {
     if quotable {
         Ok(())
     } else {
-        Err("cannot quote".to_string())
+        Err(Unwritable::CannotQuote)
     }
 }
 
@@ -199,60 +220,50 @@ mod tests {
         };
         let bare = Ctx::FrontMatter { quote: Quote::Bare };
         let ok = Ok(());
-        let quote = Err("cannot quote".to_string());
-        let rows: &[(&str, Ctx, bool, Result<(), String>)] = &[
+        let quote = Err(Unwritable::CannotQuote);
+        let rows: &[(&str, Ctx, bool, Result<(), Unwritable>)] = &[
             (
                 "https://a.test/n",
                 Ctx::MdDest,
                 false,
-                Err("not verbatim".to_string()),
+                Err(Unwritable::NotVerbatim),
             ),
-            ("https://a.test/n", Ctx::MdDest, true, ok.clone()),
-            ("https://a.test/n", Ctx::MdText, true, ok.clone()),
-            ("https://a.test/n", Ctx::Html, true, ok.clone()),
-            ("https://a.test/n", single, true, ok.clone()),
-            ("https://a.test/n", double, true, ok.clone()),
-            ("https://a.test/n", bare, true, ok.clone()),
-            ("https://a.test/it's", single, true, quote.clone()),
-            ("https://a.test/it's", double, true, ok.clone()),
-            ("https://a.test/a\"b", double, true, quote.clone()),
-            ("https://a.test/a\"b", single, true, ok.clone()),
-            ("https://a.test/it's", bare, true, ok.clone()),
-            ("https://a.test/a b", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/a\tb", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/M/a)b", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/M/a(b", Ctx::MdDest, true, quote.clone()),
-            (")(", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/a(b)c", Ctx::MdDest, true, ok.clone()),
-            ("https://a.test/a\\)b", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/a\\b", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/a\\b", double, true, quote.clone()),
-            ("https://a.test/a\\b", single, true, ok.clone()),
-            ("https://a.test/a\nb", Ctx::MdDest, true, quote.clone()),
+            ("https://a.test/n", Ctx::MdDest, true, ok),
+            ("https://a.test/n", Ctx::MdText, true, ok),
+            ("https://a.test/n", Ctx::Html, true, ok),
+            ("https://a.test/n", single, true, ok),
+            ("https://a.test/n", double, true, ok),
+            ("https://a.test/n", bare, true, ok),
+            ("https://a.test/it's", single, true, quote),
+            ("https://a.test/it's", double, true, ok),
+            ("https://a.test/a\"b", double, true, quote),
+            ("https://a.test/a\"b", single, true, ok),
+            ("https://a.test/it's", bare, true, ok),
+            ("https://a.test/a b", Ctx::MdDest, true, quote),
+            ("https://a.test/a\tb", Ctx::MdDest, true, quote),
+            ("https://a.test/M/a)b", Ctx::MdDest, true, quote),
+            ("https://a.test/M/a(b", Ctx::MdDest, true, quote),
+            (")(", Ctx::MdDest, true, quote),
+            ("https://a.test/a(b)c", Ctx::MdDest, true, ok),
+            ("https://a.test/a\\)b", Ctx::MdDest, true, quote),
+            ("https://a.test/a\\b", Ctx::MdDest, true, quote),
+            ("https://a.test/a\\b", double, true, quote),
+            ("https://a.test/a\\b", single, true, ok),
+            ("https://a.test/a\nb", Ctx::MdDest, true, quote),
             (
                 "https://a.test/it's",
                 single,
                 false,
-                Err("not verbatim".to_string()),
+                Err(Unwritable::NotVerbatim),
             ),
-            ("https://a.test/a<b", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/a>b", Ctx::MdDest, true, quote.clone()),
-            ("https://a.test/a b", Ctx::MdText, true, ok.clone()),
-            (
-                "https://m.test/n?x=&copy;",
-                Ctx::MdDest,
-                true,
-                quote.clone(),
-            ),
-            ("https://m.test/n?x=&#38;", Ctx::MdDest, true, quote.clone()),
-            (
-                "https://m.test/n?x=&#x26;",
-                Ctx::MdDest,
-                true,
-                quote.clone(),
-            ),
-            ("https://m.test/n?a=1&b=2", Ctx::MdDest, true, ok.clone()),
-            ("https://m.test/n?x=&copy;", Ctx::MdText, true, ok.clone()),
+            ("https://a.test/a<b", Ctx::MdDest, true, quote),
+            ("https://a.test/a>b", Ctx::MdDest, true, quote),
+            ("https://a.test/a b", Ctx::MdText, true, ok),
+            ("https://m.test/n?x=&copy;", Ctx::MdDest, true, quote),
+            ("https://m.test/n?x=&#38;", Ctx::MdDest, true, quote),
+            ("https://m.test/n?x=&#x26;", Ctx::MdDest, true, quote),
+            ("https://m.test/n?a=1&b=2", Ctx::MdDest, true, ok),
+            ("https://m.test/n?x=&copy;", Ctx::MdText, true, ok),
         ];
         for (fix, ctx, verbatim, expected) in rows {
             assert_eq!(
@@ -376,7 +387,7 @@ mod tests {
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             rewritten
         );
-        let changed = Fix::Manual("changed during run".to_string());
+        let changed = Fix::Manual(ManualReason::ChangedDuringRun);
         assert_eq!(findings[0].fix, changed);
         assert_eq!(findings[1].fix, changed);
         assert_eq!(leftovers(dir.path()), ["post.md"]);
@@ -399,10 +410,7 @@ mod tests {
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             "short"
         );
-        assert_eq!(
-            findings[0].fix,
-            Fix::Manual("changed during run".to_string())
-        );
+        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
     }
 
     #[test]
@@ -420,7 +428,10 @@ mod tests {
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             text.replace(OLD_B, "https://web.test/snap")
         );
-        assert_eq!(findings[0].fix, Fix::Manual("cannot quote".to_string()));
+        assert_eq!(
+            findings[0].fix,
+            Fix::Manual(ManualReason::Unwritable(Unwritable::CannotQuote))
+        );
         assert_eq!(
             findings[1].fix,
             Fix::Applied("https://web.test/snap".to_string())

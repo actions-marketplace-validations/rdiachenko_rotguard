@@ -102,6 +102,8 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::ManualReason;
+    use crate::archive::NoFix;
     use crate::extract::{Ctx, Link};
 
     fn finding(file: &str, line: u32, verdict: Verdict, fix: Fix) -> Finding {
@@ -199,7 +201,12 @@ mod tests {
 
     #[test]
     fn dead_prints_reason_and_manual_fix() {
-        let f = finding("a.md", 1, dead(), Fix::Manual("no archived copy".into()));
+        let f = finding(
+            "a.md",
+            1,
+            dead(),
+            Fix::Manual(ManualReason::Archive(NoFix::NoCapture)),
+        );
         let out = render(&[f], &Summary::default());
         assert!(
             out.starts_with(
@@ -267,7 +274,12 @@ mod tests {
             ),
             "{out}"
         );
-        let manual = finding("a.md", 1, verdict(), Fix::Manual("no archived copy".into()));
+        let manual = finding(
+            "a.md",
+            1,
+            verdict(),
+            Fix::Manual(ManualReason::Archive(NoFix::NoCapture)),
+        );
         assert!(
             render(&[manual], &Summary::default()).contains("\n    manual fix: no archived copy\n")
         );
