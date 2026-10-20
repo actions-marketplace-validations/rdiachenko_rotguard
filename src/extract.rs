@@ -780,6 +780,18 @@ fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Option<usi
     let mut had_key = false;
     loop {
         pos = skip_spaces(pos);
+        // Node properties (anchors and tags) are not part of the value; a value that is
+        // only properties introduces the nested block below it.
+        while matches!(bytes.get(pos), Some(b'&' | b'!')) {
+            // YAML separates a property from what follows by a space or a tab.
+            let end = line[pos..]
+                .find([' ', '\t'])
+                .map_or(bytes.len(), |n| pos + n);
+            pos = end;
+            while matches!(bytes.get(pos), Some(b' ' | b'\t')) {
+                pos += 1;
+            }
+        }
         if pos >= bytes.len() || bytes[pos] == b'#' {
             return None;
         }
@@ -1050,6 +1062,71 @@ mod tests {
         );
         assert!(page.links.iter().all(|l| l.verbatim));
         assert_slices(text, &page);
+    }
+
+    #[test]
+    fn yaml_property_only_value_introduces_the_nested_block() {
+        for text in [
+            "---\nlinks: &l\n  - https://a.test/x\n---\n",
+            "---\nmeta: !thing\n  url: https://a.test/x\n---\n",
+            "---\nmeta: &m !thing # c\n  url: https://a.test/x\n---\n",
+            "---\nlinks:\n  - &l\n    url: https://a.test/x\n---\n",
+        ] {
+            let page = run(text);
+            assert_eq!(page.links.len(), 1, "{text:?}");
+            assert_eq!(page.links[0].url, "https://a.test/x");
+            assert!(page.links[0].verbatim, "{text:?}");
+            assert_eq!(&text[page.links[0].span.clone()], "https://a.test/x");
+        }
+    }
+
+    #[test]
+    fn yaml_properties_before_a_value_are_not_part_of_it() {
+        let fm = |quote| Ctx::FrontMatter { quote };
+        let text = "---\na: &x https://a.test/z\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        assert_eq!(page.links[0].ctx, fm(Quote::Bare));
+        assert!(page.links[0].verbatim);
+        assert_eq!(&text[page.links[0].span.clone()], "https://a.test/z");
+
+        let text = "---\na: !!str 'https://a.test/q'\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        assert_eq!(page.links[0].ctx, fm(Quote::Single));
+        assert!(page.links[0].verbatim);
+        assert_eq!(&text[page.links[0].span.clone()], "https://a.test/q");
+    }
+
+    #[test]
+    fn yaml_tab_after_a_property_still_ends_it() {
+        let text = "---\na: !foo\t|\n  https://a.test/b\nb: https://a.test/b\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        assert!(page.links[0].verbatim);
+        let span = page.links[0].span.clone();
+        assert_eq!(&text[span.clone()], "https://a.test/b");
+        assert_eq!(
+            text[..span.start].matches('\n').count(),
+            3,
+            "link is on line 4"
+        );
+    }
+
+    #[test]
+    fn yaml_block_scalar_after_a_property_has_no_links() {
+        let page = run("---\na: !foo |\n  https://a.test/b\n---\n");
+        assert!(page.links.is_empty());
+    }
+
+    #[test]
+    fn yaml_verbatim_tag_is_a_property() {
+        let text = "---\na: !<tag:yaml.org,2002:str> https://a.test/v\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        assert_eq!(page.links[0].ctx, Ctx::FrontMatter { quote: Quote::Bare });
+        assert!(page.links[0].verbatim);
+        assert_eq!(&text[page.links[0].span.clone()], "https://a.test/v");
     }
 
     #[test]

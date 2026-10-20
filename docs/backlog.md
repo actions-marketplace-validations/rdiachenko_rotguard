@@ -2,7 +2,6 @@
 
 - [idea] Weekly GitHub Action that runs `rotguard --apply` on the site and opens a PR with the fixes — from shape link-health, 2026-10-19
 - [idea] Run-state file so a link counts as dead only after N consecutive failing runs and flaky hosts stop flapping in CI — from shape link-health, 2026-10-19
-- [P2] A YAML value that is only an anchor or tag (`a: &x`, `a: !foo`) makes the lexer skip the nested block, so its URLs fall back to non-verbatim whole-block spans — src/extract.rs:421 — from whittle/link-health, 2026-10-19
 - [P2] No unit test covers `FetchError::Dns`; it needs a resolver failure that doesn't use the network — src/check.rs — from whittle/link-health, 2026-10-19
 - [P2] `Out::entries` panics on any unindented stdout line that isn't a header or the summary, so an extra informational line fails every `entry()` test — tests/acceptance/support.rs:683 — from whittle/link-health, 2026-10-19
 - [P2] S37's unreadable-file case uses chmod 000, which root ignores (Docker CI), so the sub-case exits 0 there — tests/acceptance/report.rs:107 — from whittle/link-health, 2026-10-19
@@ -27,3 +26,7 @@
 - [idea] Decide whether R10 means any hop through `/` or only the final URL: today `/archives/123` → `/?p=123` → `/2020/post/` is SUSPECT and loses its permanent fix — src/check.rs:307 — from whittle/link-health, re-tagged 2026-10-20
 - [idea] Decide R11's probe for a path ending in `/`: today `/docs/` probes the child `/docs/<token>`, not a sibling, so sites that send unknown sub-paths to the section index flag directory-style pages — src/check.rs:498 — from whittle/link-health, re-tagged 2026-10-20
 - [idea] Decide R19's detail line for a fix `--apply` could not write: today it prints `fix: <url>` like an applied one, and only stderr and exit 2 differ — src/report.rs:96 — from whittle/backlog-2026-10-20, re-tagged 2026-10-20
+- [P2] A plain scalar nested under a value-less key (or a property-only value like `a: &x`) has its continuation lines measured against their own indent, not the owning node's, so `a: &x
+  https://a.test/p
+  more
+b: https://a.test/p` puts the verbatim span on line 3 instead of `b`'s line; pass the parent indent down for value-less lines — src/extract.rs:788 — from whittle/backlog-2026-10-20-3, 2026-10-20
