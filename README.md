@@ -1,6 +1,87 @@
 # rotguard
 
-Keeps a static site's outbound links healthy: finds dead, redirected and
-soft-404 links and proposes fixes. Reusable across sites.
+Checks the outbound links of a markdown site for rot: dead links, redirects and soft-404s
+(pages that answer 200 but are really gone). It proposes a fix for each one: the new URL for a
+permanent redirect, or a Wayback Machine snapshot for a dead page. With `--apply` it writes those
+fixes back into your files.
 
-> Status: being designed. The design will live in `docs/design/`.
+## Install
+
+Needs a recent stable Rust toolchain (the crate uses edition 2024).
+
+```sh
+cargo install --path .
+```
+
+## Use
+
+Put a `rotguard.toml` in your site's root (see [Configure](#configure)), then:
+
+```sh
+rotguard                 # check the site in the current directory; changes nothing
+rotguard path/to/site    # check another directory
+rotguard --apply         # also write the proposed fixes into the files
+rotguard --strict        # also fail on temporary redirects and unverifiable links
+```
+
+Run it without `--apply` first, read the report, then run it again with `--apply`.
+
+## Configure
+
+Only `site_url` is required. Links to its host count as internal and are not checked.
+
+```toml
+site_url = "https://example.com"
+
+# Optional; the values shown are the defaults.
+content = ["content/**/*.md"]   # files to scan, relative to the site root
+date_key = "date"               # front-matter key whose date picks the snapshot
+ignore = []                     # regexes; matching URLs are skipped
+deadline_s = 300                # links unfinished by then are reported unverifiable
+
+# Turn soft-404 detection off for a host that fools it.
+[hosts."goodreads.com"]
+soft404 = false
+```
+
+Other keys, for when the defaults don't suit: `user_agent`, `not_found_phrases`, `archive_url`,
+`host_interval_ms`, `archive_interval_ms`, `recheck_delay_ms` and `timeout_ms`. An unknown key is
+an error.
+
+## Read the report
+
+rotguard prints one entry for each broken link, sorted by file and line, then a summary:
+
+```text
+content/posts/a.md:12  PERMANENT REDIRECT 301  https://old.example.com/page
+    fix: https://new.example.com/page
+content/posts/b.md:3  DEAD 404  https://gone.example.com/x
+    fix: https://web.archive.org/web/20200101000000/https://gone.example.com/x
+content/posts/c.md:7  TEMPORARY REDIRECT 302  https://a.example.com/
+    final: https://a.example.com/login
+checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, ignored 0
+```
+
+| Class | Meaning | Fix |
+|---|---|---|
+| `PERMANENT REDIRECT` | 301/308 to a live page | the redirect target |
+| `DEAD` | 404, 410 or no such host, on two tries | the snapshot closest to the page's date |
+| `SUSPECT` | looks like a soft-404, e.g. redirected to the site's home page | a snapshot, never applied |
+| `TEMPORARY REDIRECT` | 302/303/307 | none; shows where it ends up |
+| `UNVERIFIABLE` | 401, 403, 429, 5xx, timeout, TLS error and so on | none |
+
+A detail line reading `manual fix: <reason>` means rotguard won't write that fix. You edit the
+link yourself:
+- `not verbatim`: the link is in YAML front matter, raw HTML (`href`/`src`) or a bare URL, or
+  it is written with escapes. rotguard only rewrites markdown links and TOML front-matter strings.
+- `cannot quote`: the new URL can't be written in that position, for example a `'` inside a
+  single-quoted string.
+- `no archived copy`, `archive unreachable` or `deadline`: no snapshot was found.
+- `changed during run`: the file was edited while rotguard ran, so it wasn't touched.
+
+## Exit codes
+
+- `0`: nothing is left to fix.
+- `1`: a dead, permanent-redirect or suspect link is still unfixed. With `--strict`, temporary
+  redirects and unverifiable links count too.
+- `2`: rotguard itself failed, for example because `rotguard.toml` is missing or invalid.
