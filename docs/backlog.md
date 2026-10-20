@@ -8,7 +8,6 @@
 - [P2] No unit test covers `FetchError::Dns`; it needs a resolver failure that doesn't use the network — src/check.rs — from whittle/link-health, 2026-10-19
 - [P2] `Out::entries` panics on any unindented stdout line that isn't a header or the summary, so an extra informational line fails every `entry()` test — tests/acceptance/support.rs:683 — from whittle/link-health, 2026-10-19
 - [P2] S37's unreadable-file case uses chmod 000, which root ignores (Docker CI), so the sub-case exits 0 there — tests/acceptance/report.rs:107 — from whittle/link-health, 2026-10-19
-- [P2] The Temporary row of `classify` is unit-tested only with a 307 first hop; add 302 → 200 and 303 → 200 rows — src/check.rs:722 — from whittle/link-health, 2026-10-19
 - [P2] `Url::parse` normalises dot segments in a capture's `original` (`/a/../b` → `/b`, `%2e%2e`), and a `#` in it becomes a fragment, so the snapshot fix can silently differ from the capture; verify the result still ends with the original, else NoFix — src/archive.rs:110 — from whittle/link-health, 2026-10-19
 - [P2] A dead, permanent or suspect finding with `Fix::None` silently prints no detail line, though R19 requires one; assert or test it — src/report.rs:55 — from whittle/link-health, 2026-10-19
 - [P2] Content glob `*` matches across `/` (`content/*.md` also picks `content/sub/x.md`); build globs with `literal_separator(true)` — src/lib.rs:99 — from whittle/link-health, 2026-10-19
@@ -18,9 +17,6 @@
 - [P2] Bare-URL trimming can split a trailing backslash escape (`see https://m.test/a\_` gives verbatim `…/a\`); never trim a character escaped by `\`, or trim the `\` with it — src/extract.rs:396 — from whittle/link-health, 2026-10-19
 - [P2] Any hop through `/` makes a URL Suspect, even when the chain ends on a real page (`/archives/123` → `/?p=123` → `/2020/post/`), losing a Permanent fix; R10 is ambiguous; consider testing only the final URL — src/check.rs:303 — from whittle/link-health, 2026-10-19
 - [P2] For a path ending in `/` the probe is a child (`/docs/` → `/docs/<token>`), not a sibling, so sites that redirect unknown sub-paths to the section index flag directory-style pages; R11 is ambiguous about the empty last segment — src/check.rs:447 — from whittle/link-health, 2026-10-19
-- [P2] No test covers the "probe: same final URL" signal — src/check.rs:477 — from whittle/link-health, 2026-10-19
-- [P2] No test shows the probe signals ignore a non-2xx probe (every non-2xx probe in tests has an empty body); add a 404 probe with the page's title and expect Ok — src/check.rs:473 — from whittle/link-health, 2026-10-19
-- [P2] No test covers a root URL with a not-found title (the title check runs without a probe) — src/check.rs:462 — from whittle/link-health, 2026-10-19
 - [P2] Url-derived fixes can break Html and MdText positions R23 doesn't cover: `'` ends a single-quoted `href='…'`, and `\`, `&entity;`, `'` or `)` in MdText change or cut off the URL when it is extracted again — src/apply.rs — from whittle/link-health, 2026-10-19
 - [P2] Archive requests can overlap when a CDX response takes longer than archive_interval_ms; hold the gate across the request if R6's one-in-flight rule is meant to cover the archive — src/archive.rs:124 — from whittle/link-health, 2026-10-19
 - [P2] A leading UTF-8 BOM hides front matter (no date; values extracted as MdText, so writable can't refuse a `'` inside a quoted string); strip it and offset spans by 3 — src/extract.rs:530 — from whittle/link-health, 2026-10-19

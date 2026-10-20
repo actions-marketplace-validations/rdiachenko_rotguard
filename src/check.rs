@@ -1086,6 +1086,8 @@ mod tests {
         let permanent_run = fetched(&[(308, "p1"), (302, "p2"), (200, "p3")]);
         let permanent_two = fetched(&[(301, "p1"), (308, "p2"), (200, "p3")]);
         let temporary = fetched(&[(307, "t1"), (301, "t2"), (200, "t3")]);
+        let temporary_302 = fetched(&[(302, "u1"), (200, "u2")]);
+        let temporary_303 = fetched(&[(303, "v1"), (200, "v2")]);
         let cases: Vec<(&str, Result<Fetched, FetchError>, Verdict)> = vec![
             ("404", fetched(&[(404, "a")]), dead("404")),
             ("410", fetched(&[(410, "a")]), dead("410")),
@@ -1137,6 +1139,22 @@ mod tests {
                 Verdict::Temporary {
                     chain: temporary.unwrap().chain,
                     final_url: hop(200, "t3").url,
+                },
+            ),
+            (
+                "302 then 200 is temporary",
+                temporary_302.clone(),
+                Verdict::Temporary {
+                    chain: temporary_302.unwrap().chain,
+                    final_url: hop(200, "u2").url,
+                },
+            ),
+            (
+                "303 then 200 is temporary",
+                temporary_303.clone(),
+                Verdict::Temporary {
+                    chain: temporary_303.unwrap().chain,
+                    final_url: hop(200, "v2").url,
                 },
             ),
             (
@@ -1577,6 +1595,54 @@ mod tests {
         let u = url(&server, "/docs/real");
         let got = check_all(vec![u.clone()], &config_for(""), far()).await;
         assert_eq!(reason_of(&got[&u]), "probe: same title");
+    }
+
+    #[tokio::test]
+    async fn a_probe_ending_at_the_same_final_url_is_suspect() {
+        let server = MockServer::start().await;
+        let to_landing = || ResponseTemplate::new(302).insert_header("location", "/docs/landing");
+        mount(&server, "^/docs/real$", to_landing()).await;
+        mount(&server, "^/docs/[a-z0-9]{24}$", to_landing()).await;
+        mount(
+            &server,
+            "^/docs/landing$",
+            page("Landing", "alpha beta gamma delta"),
+        )
+        .await;
+        let u = url(&server, "/docs/real");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(reason_of(&got[&u]), "probe: same final URL");
+    }
+
+    #[tokio::test]
+    async fn a_404_probe_with_the_pages_title_and_text_is_ignored() {
+        let server = MockServer::start().await;
+        let html = "<html><head><title>Docs home</title></head><body>alpha beta gamma delta epsilon zeta</body></html>";
+        mount(
+            &server,
+            "^/docs/real$",
+            page("Docs home", "alpha beta gamma delta epsilon zeta"),
+        )
+        .await;
+        mount(
+            &server,
+            "^/docs/[a-z0-9]{24}$",
+            ResponseTemplate::new(404).set_body_string(html),
+        )
+        .await;
+        let u = url(&server, "/docs/real");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
+    }
+
+    #[tokio::test]
+    async fn a_root_url_with_a_not_found_title_is_suspect_without_a_probe() {
+        let server = MockServer::start().await;
+        mount(&server, "^/$", page("Page not found", "sorry")).await;
+        let u = url(&server, "/");
+        let got = check_all(vec![u.clone()], &config_for(""), far()).await;
+        assert_eq!(reason_of(&got[&u]), "title says \"not found\"");
+        assert_eq!(gets(&server).await, 1);
     }
 
     #[tokio::test]
