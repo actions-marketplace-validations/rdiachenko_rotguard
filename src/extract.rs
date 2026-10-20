@@ -310,13 +310,12 @@ fn body_links(page: &mut Page, text: &str, lines: &Lines, body_start: usize) {
                     let Some(value) = caps.get(1).or_else(|| caps.get(2)) else {
                         continue;
                     };
-                    let raw = value.as_str();
-                    let decoded = decode_entities(raw);
+                    let decoded = decode_entities(value.as_str());
                     if keep(&decoded) {
                         let span = range.start + value.start()..range.start + value.end();
-                        // Character references mean the raw bytes are not the URL.
+                        // Raw-HTML links are never written: manual fix.
                         page.links
-                            .push(link(lines, &decoded, span, Ctx::Html, decoded == raw));
+                            .push(link(lines, &decoded, span, Ctx::Html, false));
                     }
                 }
             }
@@ -404,7 +403,8 @@ fn scan_bare(page: &mut Page, text: &str, lines: &Lines, segment: Range<usize>) 
                 &decoded,
                 start..start + raw.len(),
                 Ctx::MdText,
-                decoded == raw,
+                // Bare URLs are never written: manual fix.
+                false,
             ));
         }
     }
@@ -1659,10 +1659,10 @@ mod tests {
         assert_eq!(
             got,
             [
-                ("https://m.test/a_b_(c)&x=1", 1, Ctx::MdText, true),
-                ("https://m.test/x", 3, Ctx::MdText, true),
-                ("https://m.test/s", 5, Ctx::MdText, true),
-                ("https://m.test/t", 7, Ctx::MdText, true),
+                ("https://m.test/a_b_(c)&x=1", 1, Ctx::MdText, false),
+                ("https://m.test/x", 3, Ctx::MdText, false),
+                ("https://m.test/s", 5, Ctx::MdText, false),
+                ("https://m.test/t", 7, Ctx::MdText, false),
             ]
         );
     }
@@ -1685,9 +1685,9 @@ mod tests {
             (
                 "- see https://m.test/**b**/c\n",
                 "https://m.test/**b**/c",
-                true,
+                false,
             ),
-            ("> - https://m.test/*q*\n", "https://m.test/*q", true),
+            ("> - https://m.test/*q*\n", "https://m.test/*q", false),
         ];
         for (text, url, verbatim) in cases {
             let page = run(text);

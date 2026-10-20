@@ -190,13 +190,15 @@ impl Error for Unwritable {}
 ///
 /// # Errors
 ///
-/// Returns [`Unwritable::NotVerbatim`] when the source bytes differ from the link's URL,
+/// Returns [`Unwritable::NotVerbatim`] when the source bytes differ from the link's URL or the
+/// link is raw HTML or a bare URL (never written),
 /// [`Unwritable::CannotQuote`] when the fix cannot be written inside the link's delimiters.
 pub fn writable(fix: &str, link: &Link) -> Result<(), Unwritable> {
     if !link.verbatim {
         return Err(Unwritable::NotVerbatim);
     }
     let quotable = match link.ctx {
+        Ctx::MdText | Ctx::Html => return Err(Unwritable::NotVerbatim),
         Ctx::FrontMatter {
             quote: Quote::Single,
         } => !fix.contains('\''),
@@ -204,7 +206,7 @@ pub fn writable(fix: &str, link: &Link) -> Result<(), Unwritable> {
             quote: Quote::Double,
         } => !fix.contains(['"', '\\']),
         Ctx::MdDest => md_dest_ok(fix),
-        Ctx::FrontMatter { quote: Quote::Bare } | Ctx::MdText | Ctx::Html => true,
+        Ctx::FrontMatter { quote: Quote::Bare } => true,
     };
     if quotable {
         Ok(())
@@ -287,8 +289,18 @@ mod tests {
                 Err(Unwritable::NotVerbatim),
             ),
             ("https://a.test/n", Ctx::MdDest, true, ok),
-            ("https://a.test/n", Ctx::MdText, true, ok),
-            ("https://a.test/n", Ctx::Html, true, ok),
+            (
+                "https://a.test/n",
+                Ctx::MdText,
+                true,
+                Err(Unwritable::NotVerbatim),
+            ),
+            (
+                "https://a.test/n",
+                Ctx::Html,
+                true,
+                Err(Unwritable::NotVerbatim),
+            ),
             ("https://a.test/n", single, true, ok),
             ("https://a.test/n", double, true, ok),
             ("https://a.test/n", bare, true, ok),
@@ -316,12 +328,22 @@ mod tests {
             ),
             ("https://a.test/a<b", Ctx::MdDest, true, quote),
             ("https://a.test/a>b", Ctx::MdDest, true, quote),
-            ("https://a.test/a b", Ctx::MdText, true, ok),
+            (
+                "https://a.test/a b",
+                Ctx::MdText,
+                true,
+                Err(Unwritable::NotVerbatim),
+            ),
             ("https://m.test/n?x=&copy;", Ctx::MdDest, true, quote),
             ("https://m.test/n?x=&#38;", Ctx::MdDest, true, quote),
             ("https://m.test/n?x=&#x26;", Ctx::MdDest, true, quote),
             ("https://m.test/n?a=1&b=2", Ctx::MdDest, true, ok),
-            ("https://m.test/n?x=&copy;", Ctx::MdText, true, ok),
+            (
+                "https://m.test/n?x=&copy;",
+                Ctx::MdText,
+                true,
+                Err(Unwritable::NotVerbatim),
+            ),
         ];
         for (fix, ctx, verbatim, expected) in rows {
             assert_eq!(

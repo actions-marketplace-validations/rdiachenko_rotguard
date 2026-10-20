@@ -45,7 +45,6 @@ async fn simplify_s1_yaml_front_matter_is_left_alone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn simplify_s2_html_href_is_left_alone() {
     let w = moved_world().await;
     let old = w.url("/old");
@@ -59,7 +58,6 @@ async fn simplify_s2_html_href_is_left_alone() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn simplify_s3_bare_url_is_left_alone() {
     let w = moved_world().await;
     let old = w.url("/old");
