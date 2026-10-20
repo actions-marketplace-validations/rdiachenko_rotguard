@@ -32,6 +32,8 @@ pub enum ConfigError {
     UserAgent { value: String },
     /// Two `[hosts]` keys are equal once lowercased; `host` is the lowercased name.
     DuplicateHost { host: String },
+    /// `deadline_s` is above 86400 (one day).
+    Deadline { value: u64 },
 }
 
 impl fmt::Display for ConfigError {
@@ -49,6 +51,10 @@ impl fmt::Display for ConfigError {
                 f,
                 "invalid {FILE_NAME}: `user_agent` ({value:?}) is not a valid HTTP header value"
             ),
+            Self::Deadline { value } => write!(
+                f,
+                "invalid {FILE_NAME}: `deadline_s` ({value}) must be at most {MAX_DEADLINE_S}"
+            ),
             Self::DuplicateHost { host } => write!(
                 f,
                 "invalid {FILE_NAME}: `[hosts]` lists {host:?} more than once (keys ignore case)"
@@ -63,7 +69,7 @@ impl Error for ConfigError {
             Self::Read { source, .. } => Some(source),
             Self::Parse(source) => Some(source),
             Self::Ignore { source, .. } => Some(source),
-            Self::UserAgent { .. } | Self::DuplicateHost { .. } => None,
+            Self::UserAgent { .. } | Self::DuplicateHost { .. } | Self::Deadline { .. } => None,
         }
     }
 }
@@ -179,6 +185,10 @@ fn default_timeout_ms() -> u64 {
     10_000
 }
 
+/// Longest run `deadline_s` may ask for: one day. No run needs more, and the
+/// bound keeps `Instant::now() + deadline` from overflowing.
+const MAX_DEADLINE_S: u64 = 86_400;
+
 fn default_deadline_s() -> u64 {
     300
 }
@@ -187,6 +197,11 @@ impl TryFrom<Raw> for Config {
     type Error = ConfigError;
 
     fn try_from(raw: Raw) -> Result<Self, ConfigError> {
+        if raw.deadline_s > MAX_DEADLINE_S {
+            return Err(ConfigError::Deadline {
+                value: raw.deadline_s,
+            });
+        }
         if HeaderValue::from_str(&raw.user_agent).is_err() {
             return Err(ConfigError::UserAgent {
                 value: raw.user_agent,
@@ -315,6 +330,31 @@ soft404 = false
             "{err}"
         );
         assert!(err.to_string().contains("a.test"), "{err}");
+    }
+
+    #[test]
+    fn deadline_above_one_day_is_rejected() {
+        // i64::MAX is the largest integer TOML can hold.
+        for value in ["86401", "9223372036854775807"] {
+            let err = parse(&format!(
+                "site_url = \"https://site.test\"\ndeadline_s = {value}\n"
+            ))
+            .unwrap_err();
+
+            assert!(
+                matches!(err, ConfigError::Deadline { .. }),
+                "{value}: {err}"
+            );
+            assert!(err.to_string().contains("deadline_s"), "{value}: {err}");
+        }
+    }
+
+    #[test]
+    fn deadline_of_one_day_is_accepted() {
+        let cfg =
+            parse("site_url = \"https://site.test\"\ndeadline_s = 86400\n").expect("config parses");
+
+        assert_eq!(cfg.deadline, Duration::from_secs(86_400));
     }
 
     #[test]
