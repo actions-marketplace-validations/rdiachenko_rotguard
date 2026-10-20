@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use clap::Parser;
-use globset::{Glob, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSetBuilder};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use url::Url;
@@ -140,7 +140,10 @@ pub fn run(args: Args) -> ExitCode {
 fn read_pages(site_dir: &Path, cfg: &Config) -> Result<Vec<(PathBuf, Page)>, String> {
     let mut builder = GlobSetBuilder::new();
     for pattern in &cfg.content {
-        let glob = Glob::new(pattern).map_err(|err| format!("content glob {pattern:?}: {err}"))?;
+        let glob = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .map_err(|err| format!("content glob {pattern:?}: {err}"))?;
         builder.add(glob);
     }
     let globs = builder
@@ -326,6 +329,53 @@ fn exit_code(findings: &[Finding], strict: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    /// Creates `relative` under `dir` with `text`. Only `src/apply.rs` may write
+    /// files with the std calls, so this goes through a zero-random-suffix tempfile.
+    fn put(dir: &Path, relative: &str, text: &str) {
+        let path = dir.join(relative);
+        let parent = path.parent().expect("test paths have a parent");
+        std::fs::create_dir_all(parent).expect("create test dir");
+        let name = path.file_stem().and_then(|s| s.to_str()).expect("stem");
+        let ext = path.extension().and_then(|s| s.to_str()).expect("ext");
+        let mut file = tempfile::Builder::new()
+            .prefix(name)
+            .suffix(&format!(".{ext}"))
+            .rand_bytes(0)
+            .tempfile_in(parent)
+            .expect("create test file");
+        file.write_all(text.as_bytes()).expect("write test file");
+        file.keep().expect("keep test file");
+    }
+
+    fn matched(patterns: &str) -> Vec<PathBuf> {
+        let site = tempfile::tempdir().expect("temp site");
+        put(site.path(), "content/a.md", "a\n");
+        put(site.path(), "content/sub/b.md", "b\n");
+        let cfg = config::parse(&format!(
+            "site_url = \"https://site.test\"\ncontent = [{patterns}]\n"
+        ))
+        .expect("valid config");
+        let pages = read_pages(site.path(), &cfg).expect("pages read");
+        pages.into_iter().map(|(path, _)| path).collect()
+    }
+
+    #[test]
+    fn single_star_glob_stops_at_a_slash() {
+        assert_eq!(matched("\"content/*.md\""), [PathBuf::from("content/a.md")]);
+    }
+
+    #[test]
+    fn double_star_glob_crosses_directories() {
+        assert_eq!(
+            matched("\"content/**/*.md\""),
+            [
+                PathBuf::from("content/a.md"),
+                PathBuf::from("content/sub/b.md")
+            ]
+        );
+    }
 
     #[test]
     fn chain_joins_an_error_with_its_sources() {
