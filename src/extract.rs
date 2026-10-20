@@ -734,11 +734,17 @@ fn lex_yaml(block: &str) -> Vec<Token> {
     let mut plain: Option<usize> = None;
     for line in block.split_inclusive('\n') {
         let text = line.trim_end_matches(['\n', '\r']);
-        let indent = text.len() - text.trim_start_matches(' ').len();
+        // A tab counts as a space here, as it does everywhere a line's leading
+        // whitespace is read.
+        let body = text.trim_start_matches([' ', '\t']);
+        let indent = text.len() - body.len();
         if let Some(parent) = inside
             && (text.trim().is_empty() || indent > parent)
         {
+            // A `#` line is a comment and leaves the value alone; any other
+            // non-blank line continues the scalar, so the plain token is not a URL value.
             if !text.trim().is_empty()
+                && !body.starts_with('#')
                 && let Some(i) = plain.take()
             {
                 tokens.remove(i);
@@ -980,6 +986,19 @@ mod tests {
         assert!(l.verbatim);
         assert_eq!(&text[l.span.clone()], "https://a.test/x");
         assert!(text[..l.span.start].ends_with("source: "));
+    }
+
+    #[test]
+    fn yaml_comment_line_after_a_plain_value_keeps_its_token() {
+        for comment in ["  # note", "  \t# note"] {
+            let text = format!("---\nsource: https://a.test/x\n{comment}\n---\n");
+            let page = run(&text);
+            assert_eq!(page.links.len(), 1, "{comment:?}: {:?}", page.links);
+            let l = &page.links[0];
+            assert!(l.verbatim, "{comment:?}");
+            assert_eq!(&text[l.span.clone()], "https://a.test/x");
+            assert_eq!(l.line, 2);
+        }
     }
 
     #[test]
