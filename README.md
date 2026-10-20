@@ -22,7 +22,13 @@ rotguard                 # check the site in the current directory; changes noth
 rotguard path/to/site    # check another directory
 rotguard --apply         # also write the proposed fixes into the files
 rotguard --strict        # also fail on temporary redirects and unverifiable links
+rotguard --format json      # the report as JSON, for scripts
+rotguard --format html > report.html   # a page to open in a browser
 ```
+
+The JSON report is an object with `findings` and `summary`. Each finding has `file`, `line`, `url`,
+`class`, `chain`, `reason`, `final_url` and `fix` (`null`, or an object with a `kind`); `summary`
+holds the counts of the summary line.
 
 Run it without `--apply` first, read the report, then run it again with `--apply`.
 
@@ -52,7 +58,7 @@ key is an error.
 rotguard prints one entry for each broken link, sorted by file and line, then a summary:
 
 ```text
-content/posts/a.md:12  PERMANENT REDIRECT 301  https://old.example.com/page
+content/posts/a.md:12  PERMANENT REDIRECT 301 200  https://old.example.com/page
     fix: https://new.example.com/page
 content/posts/b.md:3  DEAD 404  https://gone.example.com/x
     fix: https://web.archive.org/web/20200101000000/https://gone.example.com/x
