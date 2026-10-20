@@ -85,13 +85,21 @@ pub struct Args {
     pub strict: bool,
 }
 
+/// `err` and each of its sources, joined by ": ".
+fn chain(err: &dyn std::error::Error) -> String {
+    std::iter::successors(Some(err), |e| e.source())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
 /// Runs the main flow and returns the process exit code.
 #[must_use]
 pub fn run(args: Args) -> ExitCode {
     let cfg = match config::load(&args.site_dir) {
         Ok(cfg) => cfg,
         Err(err) => {
-            eprintln!("rotguard: {err}");
+            eprintln!("rotguard: {}", chain(&err));
             return ExitCode::from(2);
         }
     };
@@ -119,7 +127,7 @@ pub fn run(args: Args) -> ExitCode {
     };
     println!("{}", report::render(&findings, &summary));
     for err in &apply_errors {
-        eprintln!("rotguard: applying fixes: {err}");
+        eprintln!("rotguard: applying fixes: {}", chain(err));
     }
     if apply_errors.is_empty() {
         exit_code(&findings, args.strict)
@@ -318,6 +326,16 @@ fn exit_code(findings: &[Finding], strict: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_joins_an_error_with_its_sources() {
+        let err = config::ConfigError::Read {
+            path: PathBuf::from("site/rotguard.toml"),
+            source: std::io::Error::other("disk on fire"),
+        };
+
+        assert_eq!(chain(&err), "cannot read site/rotguard.toml: disk on fire");
+    }
 
     #[test]
     fn manual_reasons_print_their_report_strings() {

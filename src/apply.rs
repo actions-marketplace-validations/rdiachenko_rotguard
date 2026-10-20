@@ -23,7 +23,7 @@ pub struct ApplyError {
 
 impl fmt::Display for ApplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.file.display(), self.source)
+        write!(f, "{}", self.file.display())
     }
 }
 
@@ -562,7 +562,7 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].file, Path::new("a.md"));
-        assert!(errors[0].to_string().starts_with("a.md: "));
+        assert_eq!(errors[0].to_string(), "a.md");
         assert!(errors[0].source().is_some());
         assert_eq!(
             findings[0].fix,
@@ -629,7 +629,7 @@ mod tests {
         let errors = apply(dir.path(), &mut findings);
         assert_eq!(errors.len(), 1);
         assert!(
-            errors[0].to_string().contains("post.md.rotguard.tmp"),
+            crate::chain(&errors[0]).contains("post.md.rotguard.tmp"),
             "{}",
             errors[0]
         );

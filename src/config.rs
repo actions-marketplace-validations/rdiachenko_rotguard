@@ -18,6 +18,7 @@ pub const FILE_NAME: &str = "rotguard.toml";
 
 /// Why the config could not be loaded.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// The file could not be read; `path` is the file looked for.
     Read { path: PathBuf, source: io::Error },
@@ -39,12 +40,12 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
-            Self::Parse(source) => write!(f, "invalid {FILE_NAME}: {source}"),
-            Self::Ignore { pattern, source } => {
+            Self::Read { path, .. } => write!(f, "cannot read {}", path.display()),
+            Self::Parse(_) => write!(f, "invalid {FILE_NAME}"),
+            Self::Ignore { pattern, .. } => {
                 write!(
                     f,
-                    "invalid {FILE_NAME}: bad regex in `ignore` ({pattern:?}): {source}"
+                    "invalid {FILE_NAME}: bad regex in `ignore` ({pattern:?})"
                 )
             }
             Self::UserAgent { value } => write!(
@@ -361,21 +362,21 @@ soft404 = false
     fn unknown_key_is_rejected() {
         let err = parse("site_url = \"https://site.test\"\nbogus = 1\n").unwrap_err();
 
-        assert!(err.to_string().contains("bogus"), "{err}");
+        assert!(crate::chain(&err).contains("bogus"), "{err}");
     }
 
     #[test]
     fn non_string_site_url_names_the_field() {
         let err = parse("site_url = 42\n").unwrap_err();
 
-        assert!(err.to_string().contains("site_url"), "{err}");
+        assert!(crate::chain(&err).contains("site_url"), "{err}");
     }
 
     #[test]
     fn missing_site_url_names_the_field() {
         let err = parse("date_key = \"d\"\n").unwrap_err();
 
-        assert!(err.to_string().contains("site_url"), "{err}");
+        assert!(crate::chain(&err).contains("site_url"), "{err}");
     }
 
     #[test]
@@ -407,5 +408,13 @@ soft404 = false
 
         assert!(matches!(err, ConfigError::Read { .. }));
         assert!(err.to_string().contains("rotguard.toml"), "{err}");
+    }
+
+    #[test]
+    fn display_leaves_the_source_to_the_chain() {
+        let err = parse("site_url = \"https://site.test\"\nbogus = 1\n").unwrap_err();
+
+        assert!(!err.to_string().contains("bogus"), "{err}");
+        assert!(err.source().is_some());
     }
 }
