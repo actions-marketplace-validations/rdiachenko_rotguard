@@ -146,7 +146,7 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 format!(
-                    "{} already exists and was not created by rotguard",
+                    "{} already exists; remove it and run again",
                     tmp.file_name().unwrap_or_default().to_string_lossy()
                 ),
             ));
@@ -628,11 +628,10 @@ mod tests {
         )];
         let errors = apply(dir.path(), &mut findings);
         assert_eq!(errors.len(), 1);
-        assert!(
-            crate::chain(&errors[0]).contains("post.md.rotguard.tmp"),
-            "{}",
-            errors[0]
-        );
+        let chain = crate::chain(&errors[0]);
+        assert!(chain.contains("post.md.rotguard.tmp"), "{chain}");
+        assert!(chain.contains("remove it and run again"), "{chain}");
+        assert!(!chain.contains("not created by rotguard"), "{chain}");
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
         assert_eq!(std::fs::read_link(&tmp).unwrap(), victim);
         assert_eq!(
