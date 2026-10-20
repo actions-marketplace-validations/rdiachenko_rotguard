@@ -11,7 +11,6 @@
 - [P2] An unreadable directory outside the content globs (e.g. `public/`) aborts the run with exit 2; walk only the globs' literal prefixes, or ignore walk errors on non-matching paths — src/lib.rs:107 — from whittle/link-health, 2026-10-19
 - [P2] A panicked archive lookup is reported as "manual fix: deadline", hiding the bug behind an R15 reason — src/lib.rs:262 — from whittle/link-health, 2026-10-19
 - [P2] lib.rs has no unit tests for paths no scenario covers: a permanent target's own fragment kept, an ignored URL counted once across fragments, an unreadable content file giving exit 2 — src/lib.rs — from whittle/link-health, 2026-10-19
-- [P2] Bare-URL trimming can split a trailing backslash escape (`see https://m.test/a\_` gives verbatim `…/a\`); never trim a character escaped by `\`, or trim the `\` with it — src/extract.rs:396 — from whittle/link-health, 2026-10-19
 - [P2] Archive requests can overlap when a CDX response takes longer than archive_interval_ms; hold the gate across the request if R6's one-in-flight rule is meant to cover the archive — src/archive.rs:124 — from whittle/link-health, 2026-10-19
 - [P2] `has_char_reference` over-refuses: autolinks keep character references literally, and unknown entity names aren't decoded; tell autolinks from inline links and use the HTML5 entity table — src/apply.rs:158 — from whittle/link-health, 2026-10-19
 - [P2] S15 compares the whole header, `SUSPECT redirect to root`; R19's header is `<CLASS> <status chain or reason>`, so a correct report that also prints the chain fails. Use starts_with + contains as S16, S18 and S19 do (needs a test amendment) — tests/acceptance/check.rs:264 — from the locked-test review, 2026-10-19
@@ -28,3 +27,4 @@
   https://a.test/p
   more
 b: https://a.test/p` puts the verbatim span on line 3 instead of `b`'s line; pass the parent indent down for value-less lines — src/extract.rs:788 — from whittle/backlog-2026-10-20-3, 2026-10-20
+- [P2] A bare URL can still end in a lone `\` when the regex stops rather than `trim_url`: before an escaped `"`, `'`, `<` or `>` (`see https://m.test/a\'s`), or at a line-end hard break (`…/a\` then newline); the span stays verbatim, so `--apply` would rewrite it. In `scan_bare`, drop an odd trailing `\` when the next byte is ASCII punctuation or a newline — src/extract.rs:358 — from whittle/backlog-2026-10-20-3, 2026-10-20

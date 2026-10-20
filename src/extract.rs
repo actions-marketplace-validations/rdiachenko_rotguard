@@ -396,12 +396,26 @@ fn unescape(raw: &str) -> String {
 fn trim_url(mut url: &str) -> &str {
     loop {
         let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_', '~']);
-        let trimmed = strip_unbalanced(trimmed, ')', '(');
-        let trimmed = strip_unbalanced(trimmed, ']', '[');
+        let trimmed = with_escape(url, trimmed);
+        let stripped = strip_unbalanced(trimmed, ')', '(');
+        let trimmed = with_escape(trimmed, stripped);
+        let stripped = strip_unbalanced(trimmed, ']', '[');
+        let trimmed = with_escape(trimmed, stripped);
         if trimmed.len() == url.len() {
             return url;
         }
         url = trimmed;
+    }
+}
+
+/// After `before` was cut down to `after`, drops the `\` that escaped the first removed
+/// character, so the URL never ends in half of an escape.
+fn with_escape<'a>(before: &str, after: &'a str) -> &'a str {
+    let slashes = after.bytes().rev().take_while(|&b| b == b'\\').count();
+    if after.len() < before.len() && slashes % 2 == 1 {
+        &after[..after.len() - 1]
+    } else {
+        after
     }
 }
 
@@ -1462,6 +1476,28 @@ mod tests {
                 .collect();
             assert_eq!(got, [(url, verbatim)], "{text:?}");
         }
+    }
+
+    #[test]
+    fn bare_url_trimming_keeps_escapes_whole() {
+        let text = "see https://m.test/a\\_ here\n\nhttps://m.test/b_\n\nhttps://m.test/c\\\\_\n";
+        let page = run(text);
+        let spans: Vec<(&str, &str)> = page
+            .links
+            .iter()
+            .map(|l| (l.url.as_str(), &text[l.span.clone()]))
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                ("https://m.test/a", "https://m.test/a"),
+                ("https://m.test/b", "https://m.test/b"),
+                ("https://m.test/c\\", "https://m.test/c\\\\"),
+            ]
+        );
+        let hostile = format!("https://m.test/a{}\n", "\\_".repeat(5000));
+        let page = run(&hostile);
+        assert_eq!(page.links[0].url, "https://m.test/a");
     }
 
     #[test]
