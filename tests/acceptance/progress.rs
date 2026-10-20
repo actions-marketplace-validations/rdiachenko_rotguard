@@ -83,7 +83,6 @@ async fn progress_s3_no_archive_phase_lines_when_nothing_needs_a_snapshot() {
 }
 
 #[test]
-#[ignore = "pending: S4"]
 fn progress_s4_terminal_mode_rewrites_one_line_then_clears_it() {
     let mut buf = Vec::new();
     {
