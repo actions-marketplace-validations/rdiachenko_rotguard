@@ -24,8 +24,9 @@ links, redirects and soft-404s. It reports each broken link with a proposed fix,
             └──────────────────┘ └──────────────────────────┘
 ```
 
-- **Linked websites**: a timeout, TLS error, 401, 403, 429 or 5xx makes a link `UNVERIFIABLE`,
-  not dead. Only a 404, 410 or a missing host on two tries makes it `DEAD`.
+- **Linked websites**: a timeout, TLS error, 429 or 5xx makes a link `UNVERIFIABLE`, not dead.
+  A 401, 403 or 999 is `BLOCKED` when a made-up URL beside it gets the same status, else
+  `UNVERIFIABLE`. Only a 404, 410 or a missing host on two tries makes a link `DEAD`.
 - **Wayback Machine**: when it fails or has no capture, the finding says `manual fix: no
   archived copy` or `archive unreachable`, and nothing is written.
 
@@ -41,9 +42,9 @@ One crate, `src/`:
   definitions, autolinks, raw-HTML `href`/`src`, bare URLs, and TOML and YAML front matter.
 - `check.rs`: the network. `Fetcher` sends requests politely: one in flight per host, spaced
   starts, a bound on hosts at once, redirects followed by hand. `classify` turns a fetch into a
-  `Verdict` (`Ok`, `Permanent`, `Temporary`, `Dead`, `Suspect`, `Unverifiable`). `check_all`
-  checks every distinct URL with retries, re-checks a first `Dead`, runs the soft-404 checks and
-  stops at the deadline.
+  `Verdict` (`Ok`, `Permanent`, `Temporary`, `Dead`, `Suspect`, `Unverifiable`, `Blocked`).
+  `check_all` checks every distinct URL with retries, re-checks a first `Dead`, runs the soft-404
+  and bot-wall probes and stops at the deadline.
 - `archive.rs`: Wayback CDX lookups, the latest status-200 capture on or before the page date,
   else the earliest after it, through one shared rate gate.
 - `apply.rs`: writes proposed fixes for permanent redirects and dead links. It writes only
@@ -63,14 +64,19 @@ One crate, `src/`:
 4. Look up a snapshot for each dead or suspect link at its page's date (the run date when the
    page has none).
 5. Build one finding per occurrence: a permanent redirect proposes its target, dead and suspect
-   propose the snapshot, temporary and unverifiable propose nothing.
+   propose the snapshot, temporary, unverifiable and blocked propose nothing.
 6. Print the report; exit 1 if a dead, permanent or suspect link is left (with `--strict`, also
-   temporary and unverifiable), else 0.
+   temporary, unverifiable and blocked), else 0. Blocked links are listed only with `--strict`;
+   the summary always counts them.
 
 **Soft-404 detection**: a 2xx answer is suspect when the page redirected a non-root URL to the
 site root, when its title matches a not-found phrase, or when a probe URL with a random last
 segment under the same parent path returns the same page. Probes are shared per origin and
 parent path. A host with `soft404 = false` skips these checks.
+
+The same probe decides bot walls: a link whose final status is 401, 403 or 999 is `Blocked`
+when the probe gets that status too, and `Unverifiable` when it answers differently or fails.
+This runs whatever the host's `soft404` setting, and shares the probe cache.
 
 **Apply** (`--apply`, after the check): per file, confirm each finding's span still holds its
 original URL, then rewrite and rename into place. A fix that can't be written safely becomes
@@ -96,9 +102,11 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
 - One `--format` flag picks text, JSON or HTML; JSON keys are stable and always present
   (`docs/design/report-format.md`, D1, D3).
 - `robots.txt` is not consulted (`docs/design/link-health.md`, D9).
+- A 401, 403 or 999 is a bot wall only when a same-folder probe gets the same status, and blocked
+  links are listed only with `--strict` (`docs/design/bot-walls.md`, D1, D2).
 
 ## Limits
 
 - Markdown sites only; no HTML crawling and no internal-link checks.
 - No state between runs: no history, caching or scheduled runs.
-- A site that blocks rotguard (403 or 429 to every request) shows up as unverifiable links.
+- A site that answers 429 to every request shows up as unverifiable links.

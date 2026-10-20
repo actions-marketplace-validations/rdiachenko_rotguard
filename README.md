@@ -21,7 +21,7 @@ Put a `rotguard.toml` in your site's root (see [Configure](#configure)), then:
 rotguard                 # check the site in the current directory; changes nothing
 rotguard path/to/site    # check another directory
 rotguard --apply         # also write the proposed fixes into the files
-rotguard --strict        # also fail on temporary redirects and unverifiable links
+rotguard --strict        # also fail on temporary redirects, unverifiable and blocked links
 rotguard --format json      # the report as JSON, for scripts
 rotguard --format html > report.html   # a page to open in a browser
 ```
@@ -64,7 +64,7 @@ content/posts/b.md:3  DEAD 404  https://gone.example.com/x
     fix: https://web.archive.org/web/20200101000000/https://gone.example.com/x
 content/posts/c.md:7  TEMPORARY REDIRECT 302 200  https://a.example.com/
     final: https://a.example.com/login
-checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, ignored 0
+checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, blocked 0, ignored 0
 ```
 
 | Class | Meaning | Fix |
@@ -73,7 +73,8 @@ checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, 
 | `DEAD` | 404, 410 or no such host, on two tries | the snapshot closest to the page's date |
 | `SUSPECT` | looks like a soft-404, e.g. redirected to the site's home page | a snapshot, never applied |
 | `TEMPORARY REDIRECT` | 302/303/307 | none; shows where it ends up |
-| `UNVERIFIABLE` | 401, 403, 429, 5xx, timeout, TLS error and so on | none |
+| `UNVERIFIABLE` | a 401, 403 or 999 the host doesn't give everywhere, 429, 5xx, timeout, TLS error and so on | none |
+| `BLOCKED` | 401, 403 or 999 that a made-up URL on the same host also gets: a bot wall | none; listed only with `--strict` |
 
 A detail line reading `manual fix: <reason>` means rotguard won't write that fix. You edit the
 link yourself:
@@ -88,5 +89,5 @@ link yourself:
 
 - `0`: nothing is left to fix.
 - `1`: a dead, permanent-redirect or suspect link is still unfixed. With `--strict`, temporary
-  redirects and unverifiable links count too.
+  redirects, unverifiable and blocked links count too.
 - `2`: rotguard itself failed, for example because `rotguard.toml` is missing or invalid.
