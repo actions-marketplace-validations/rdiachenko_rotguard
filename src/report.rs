@@ -1,5 +1,6 @@
 //! Formats the findings and the summary line printed on stdout.
 
+use std::borrow::Cow;
 use std::fmt::{self, Write as _};
 
 use serde::Serialize;
@@ -98,7 +99,7 @@ struct Row<'a> {
     url: &'a str,
     class: &'static str,
     chain: &'a [Hop],
-    reason: Option<&'a str>,
+    reason: Option<Cow<'a, str>>,
     final_url: Option<&'a Url>,
     fix: Option<FixView<'a>>,
 }
@@ -132,16 +133,33 @@ fn rows(findings: &[Finding]) -> Vec<Row<'_>> {
                 // `reported` drops ok findings.
                 Verdict::Ok { .. } => unreachable!("ok findings are not reported"),
                 Verdict::Permanent { chain, .. } => ("permanent", chain.as_slice(), None, None),
+                Verdict::Blocked { status } => (
+                    "blocked",
+                    [].as_slice(),
+                    Some(Cow::Owned(status.to_string())),
+                    None,
+                ),
                 Verdict::Temporary { chain, final_url } => {
                     ("temporary", chain.as_slice(), None, Some(final_url))
                 }
-                Verdict::Dead { reason } => ("dead", [].as_slice(), Some(reason.as_str()), None),
-                Verdict::Suspect { chain, reason } => {
-                    ("suspect", chain.as_slice(), Some(reason.as_str()), None)
-                }
-                Verdict::Unverifiable { reason } => {
-                    ("unverifiable", [].as_slice(), Some(reason.as_str()), None)
-                }
+                Verdict::Dead { reason } => (
+                    "dead",
+                    [].as_slice(),
+                    Some(Cow::Borrowed(reason.as_str())),
+                    None,
+                ),
+                Verdict::Suspect { chain, reason } => (
+                    "suspect",
+                    chain.as_slice(),
+                    Some(Cow::Borrowed(reason.as_str())),
+                    None,
+                ),
+                Verdict::Unverifiable { reason } => (
+                    "unverifiable",
+                    [].as_slice(),
+                    Some(Cow::Borrowed(reason.as_str())),
+                    None,
+                ),
             };
             Row {
                 file: display_path(finding),
@@ -200,6 +218,7 @@ fn describe(finding: &Finding) -> Option<(String, Option<Detail>)> {
         Verdict::Dead { reason } => (format!("DEAD {reason}"), fix_detail(&finding.fix)),
         Verdict::Suspect { reason, .. } => (format!("SUSPECT {reason}"), fix_detail(&finding.fix)),
         Verdict::Unverifiable { reason } => (format!("UNVERIFIABLE {reason}"), None),
+        Verdict::Blocked { status } => (format!("BLOCKED {status}"), None),
     })
 }
 
@@ -449,6 +468,11 @@ mod tests {
                 &["a.md:1  UNVERIFIABLE deadline  https://old.test/x#frag"],
             ),
             (
+                "blocked",
+                finding("a.md", 1, Verdict::Blocked { status: 403 }, Fix::None),
+                &["a.md:1  BLOCKED 403  https://old.test/x#frag"],
+            ),
+            (
                 "suspect with fix",
                 finding(
                     "a.md",
@@ -523,6 +547,7 @@ mod tests {
                 Fix::Applied("https://t.test/y".into()),
             ),
             finding("d/o.md", 1, Verdict::Ok { chain: chain(200) }, Fix::None),
+            finding("d/b.md", 1, Verdict::Blocked { status: 403 }, Fix::None),
             finding(
                 "d/a.md",
                 1,
@@ -544,6 +569,7 @@ mod tests {
         let expected = json!({
             "findings": [
                 row("d/a.md", "dead", json!([]), json!("404"), json!(null), json!({"kind": "proposed", "url": "https://web.test/s"})),
+                row("d/b.md", "blocked", json!([]), json!("403"), json!(null), json!(null)),
                 row("d/p.md", "permanent", hops(301), json!(null), json!(null), json!({"kind": "applied", "url": "https://t.test/y"})),
                 row("d/s.md", "suspect", hops(301), json!("redirect to root"), json!(null), json!({"kind": "manual", "reason": "no archived copy"})),
                 row("d/t.md", "temporary", hops(302), json!(null), json!("https://t.test/y"), json!(null)),

@@ -83,7 +83,7 @@ pub struct Args {
     /// Write fixes to the site instead of only reporting them.
     #[arg(long)]
     pub apply: bool,
-    /// Fail on any finding, not only on broken links.
+    /// Fail on any finding, not only on broken links, and list links on hosts that block rotguard.
     #[arg(long)]
     pub strict: bool,
     /// Report format.
@@ -138,6 +138,9 @@ pub fn run(args: Args) -> ExitCode {
     let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg, &mut progress));
     // Hung requests must not hold the process past the deadline.
     runtime.shutdown_background();
+    if !args.strict {
+        findings.retain(|f| !matches!(f.verdict, Verdict::Blocked { .. }));
+    }
     let apply_errors = if args.apply {
         apply::apply(&args.site_dir, &mut findings)
     } else {
@@ -320,7 +323,9 @@ async fn check_pages(
                     None => Fix::Manual(ManualReason::Archive(NoFix::Deadline)),
                 }
             }
-            Verdict::Temporary { .. } | Verdict::Unverifiable { .. } => Fix::None,
+            Verdict::Temporary { .. } | Verdict::Unverifiable { .. } | Verdict::Blocked { .. } => {
+                Fix::None
+            }
         };
         findings.push(Finding {
             file: occ.file.to_path_buf(),
@@ -343,6 +348,7 @@ async fn check_pages(
             Verdict::Dead { .. } => &mut summary.dead,
             Verdict::Suspect { .. } => &mut summary.suspect,
             Verdict::Unverifiable { .. } => &mut summary.unverifiable,
+            Verdict::Blocked { .. } => &mut summary.blocked,
         };
         *count += 1;
     }
@@ -388,7 +394,9 @@ fn exit_code(findings: &[Finding], strict: bool) -> ExitCode {
         Verdict::Dead { .. } | Verdict::Permanent { .. } | Verdict::Suspect { .. } => {
             !matches!(finding.fix, Fix::Applied(_))
         }
-        Verdict::Temporary { .. } | Verdict::Unverifiable { .. } => strict,
+        Verdict::Temporary { .. } | Verdict::Unverifiable { .. } | Verdict::Blocked { .. } => {
+            strict
+        }
         Verdict::Ok { .. } => false,
     });
     ExitCode::from(u8::from(unfixed))

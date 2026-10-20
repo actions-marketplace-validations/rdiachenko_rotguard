@@ -277,6 +277,10 @@ pub enum Verdict {
     Unverifiable {
         reason: String,
     },
+    /// The host answers a made-up sibling URL with the same 401, 403 or 999.
+    Blocked {
+        status: u16,
+    },
 }
 
 /// Whether a non-root URL's chain visits the root, which a host with `soft404` treats as a
@@ -425,6 +429,19 @@ async fn check_one(
         outcome = fetch_with_retries(fetcher, url).await;
     }
     let verdict = classify(&outcome, host);
+    if let Ok(fetched) = &outcome
+        && matches!(verdict, Verdict::Unverifiable { .. })
+        && let Some(last) = fetched.chain.last()
+        && matches!(last.status, 401 | 403 | 999)
+    {
+        let probe = probes.probe(fetcher, &last.url).await;
+        return match *probe {
+            ProbeResult::Answered { status, .. } if status == last.status => {
+                Verdict::Blocked { status }
+            }
+            _ => verdict,
+        };
+    }
     let (Ok(fetched), true) = (
         &outcome,
         host.soft404
@@ -1512,6 +1529,33 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert!(matches!(got[&a], Verdict::Ok { .. }));
         assert_eq!(unverifiable_reason(&got, &b), "403");
+    }
+
+    #[tokio::test]
+    async fn bot_wall_probe_decides_blocked() {
+        for (status, sibling, blocked) in [(403, 403, true), (403, 404, false), (429, 429, false)] {
+            let server = MockServer::start().await;
+            Mock::given(path("/w/page"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            mount(&server, "^/w/.+", ResponseTemplate::new(sibling)).await;
+            let page = url(&server, "/w/page");
+            let got = check_all(vec![page.clone()], &config_for(""), far(), |_| {}).await;
+            if blocked {
+                assert_eq!(
+                    got[&page],
+                    Verdict::Blocked { status },
+                    "{status}/{sibling}"
+                );
+            } else {
+                assert_eq!(
+                    unverifiable_reason(&got, &page),
+                    status.to_string(),
+                    "{status}/{sibling}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

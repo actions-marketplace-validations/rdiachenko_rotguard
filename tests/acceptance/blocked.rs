@@ -45,7 +45,6 @@ fn summary_with(blocked: usize, unverifiable: usize) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn blocked_s1_wall_is_counted_not_reported() {
     let w = wall_world().await;
 
@@ -75,7 +74,6 @@ async fn blocked_s2_lone_403_stays_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn blocked_s3_strict_reports_one_entry() {
     let w = wall_world().await;
 
@@ -92,7 +90,6 @@ async fn blocked_s3_strict_reports_one_entry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn blocked_s4_json_lists_blocked_only_under_strict() {
     let w = wall_world().await;
 
@@ -119,7 +116,6 @@ async fn blocked_s4_json_lists_blocked_only_under_strict() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S5"]
 async fn blocked_s5_probe_goes_to_the_final_hops_folder() {
     let w = World::new().await;
     w.serve(
@@ -142,7 +138,6 @@ async fn blocked_s5_probe_goes_to_the_final_hops_folder() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn blocked_s6_slow_probe_leaves_the_finding_unverifiable() {
     let mut w = World::new().await;
     w.configure(|s| s.timeout_ms = Some(200));
@@ -167,7 +162,6 @@ async fn blocked_s6_slow_probe_leaves_the_finding_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S7"]
 async fn blocked_s7_one_probe_per_folder_even_with_soft404_off() {
     let mut w = World::new().await;
     w.configure(|s| s.no_soft404_hosts = vec!["127.0.0.1".to_owned()]);
@@ -190,7 +184,6 @@ async fn blocked_s7_one_probe_per_folder_even_with_soft404_off() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S8"]
 async fn blocked_s8_apply_leaves_the_file_unchanged() {
     let w = wall_world().await;
     let before = std::fs::read(w.site.path().join("post.md")).expect("read post.md");
