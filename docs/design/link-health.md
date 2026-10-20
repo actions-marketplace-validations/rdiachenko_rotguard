@@ -89,10 +89,13 @@ Out:
 - R21: WHEN `--apply` is given THE SYSTEM SHALL replace the bytes at each finding's span with its proposed fix, for permanent redirects and for dead links that have a snapshot only. It SHALL change no other byte of the file and SHALL write each file atomically (temp file plus rename).
 - R22: IF the bytes at any span about to be applied in a file no longer equal the original URL THEN THE SYSTEM SHALL leave that whole file unchanged and report it as "changed during run". Findings that R23 turns into "manual fix" are set aside before this check and never make a file count as changed.
 - R23: IF the link was extracted with `verbatim: false`, or the fix cannot be written in that position THEN THE SYSTEM SHALL report "manual fix" and not apply it. The fix cannot be written when:
-  - it contains `'` inside a single-quoted TOML or YAML string;
+  - it contains `'` inside a single-quoted TOML string;
   - it contains `"` inside a double-quoted string;
   - it contains whitespace, an unbalanced `(` or `)`, or `<` or `>` in a markdown link
     destination (`Ctx::MdDest`: inline, reference definition or autolink).
+
+  Links in YAML front matter, raw-HTML `href`/`src` and bare URLs are extracted with
+  `verbatim: false` and never written (see docs/design/simplify.md).
 - R24: THE SYSTEM SHALL exit with code 0 when no finding remains unfixed, 1 when any remains unfixed, and 2 on a tool error. Unfixed findings are dead, permanent redirect and soft-404 suspect, plus unverifiable and temporary redirect when `--strict` is given.
 
 ## Acceptance scenarios
@@ -237,17 +240,18 @@ soft404 = false
 ```rust
 struct Page { path: PathBuf, date: Option<NaiveDate>, links: Vec<Link> }
 struct Link { url: String, line: u32, span: Range<usize>, ctx: Ctx, verbatim: bool }
-enum Ctx { MdDest, MdText, Html, FrontMatter { quote: Quote } }  // Quote: Single | Double | Bare
+enum Ctx { MdDest, MdText, Html, FrontMatter { quote: Quote } }  // Quote: Single | Double
 ```
 
 - Front matter is the leading `+++…+++` (TOML) or `---…---` (YAML) block. It is parsed with the
   `toml` crate or a YAML crate, collecting every http(s) string value and the `date_key` value. A
   TOML datetime or a string whose first 10 chars are `YYYY-MM-DD` both count as the date.
 - Front-matter spans are recorded only for the whole content of a string value between its own
-  delimiters: `'…'` or `"…"`, or a YAML plain scalar running to the end of the line. A lexer
-  over the block finds those string tokens, and a token counts only if its content equals a
-  parsed value. Comments, keys and prefixes of longer values never match (S42). The quote is the
-  delimiter. A value written with escapes doesn't appear verbatim, so it gets `verbatim: false`.
+  delimiters: `'…'` or `"…"`. A lexer over the TOML block finds those string tokens, and a
+  token counts only if its content equals a parsed value. Comments, keys and prefixes of longer
+  values never match (S42). The quote is the delimiter. A value written with escapes doesn't
+  appear verbatim, so it gets `verbatim: false`. YAML front matter is reported at the first
+  occurrence of the URL's text and never written (see docs/design/simplify.md).
 - The body is the text after the closing front-matter delimiter. It is parsed on its own with
   `pulldown-cmark` `into_offset_iter`, and the body's start offset is added to every span and line,
   so spans are file-absolute and front matter is never read as markdown.
