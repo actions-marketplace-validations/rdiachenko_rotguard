@@ -1,6 +1,6 @@
 //! Formats the findings and the summary line printed on stdout.
 
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 use serde::Serialize;
 use url::Url;
@@ -27,6 +27,7 @@ pub fn render_as(format: Format, findings: &[Finding], summary: &Summary) -> Str
     match format {
         Format::Text => render(findings, summary),
         Format::Json => render_json(findings, summary),
+        Format::Html => render_html(findings, summary),
     }
 }
 
@@ -39,6 +40,11 @@ pub fn render(findings: &[Finding], summary: &Summary) -> String {
     for finding in reported(findings) {
         write_entry(&mut out, finding);
     }
+    out.push_str(&summary_line(summary));
+    out
+}
+
+fn summary_line(summary: &Summary) -> String {
     let Summary {
         checked,
         ok,
@@ -49,13 +55,10 @@ pub fn render(findings: &[Finding], summary: &Summary) -> String {
         unverifiable,
         ignored,
     } = summary;
-    write!(
-        out,
+    format!(
         "checked {checked}: ok {ok}, permanent {permanent}, temporary {temporary}, \
          dead {dead}, suspect {suspect}, unverifiable {unverifiable}, ignored {ignored}"
     )
-    .expect("writing to a String cannot fail");
-    out
 }
 
 /// The non-ok findings, sorted by file then line.
@@ -161,20 +164,45 @@ pub fn render_json(findings: &[Finding], summary: &Summary) -> String {
     serde_json::to_string_pretty(&report).expect("the report types always serialize")
 }
 
-fn write_entry(out: &mut String, finding: &Finding) {
-    let (class, detail) = match &finding.verdict {
-        Verdict::Ok { .. } => return,
+/// The detail line under a finding: a labelled link, or a manual-fix reason.
+enum Detail {
+    Link { label: &'static str, url: String },
+    Manual(String),
+}
+
+impl fmt::Display for Detail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Link { label, url } => write!(f, "{label}: {url}"),
+            Self::Manual(reason) => write!(f, "manual fix: {reason}"),
+        }
+    }
+}
+
+/// The class wording and the detail line of a reported finding.
+fn describe(finding: &Finding) -> Option<(String, Option<Detail>)> {
+    Some(match &finding.verdict {
+        Verdict::Ok { .. } => return None,
         Verdict::Permanent { chain, .. } => (
             format!("PERMANENT REDIRECT {}", statuses(chain)),
-            fix_line(&finding.fix),
+            fix_detail(&finding.fix),
         ),
         Verdict::Temporary { chain, final_url } => (
             format!("TEMPORARY REDIRECT {}", statuses(chain)),
-            Some(format!("final: {final_url}")),
+            Some(Detail::Link {
+                label: "final",
+                url: final_url.to_string(),
+            }),
         ),
-        Verdict::Dead { reason } => (format!("DEAD {reason}"), fix_line(&finding.fix)),
-        Verdict::Suspect { reason, .. } => (format!("SUSPECT {reason}"), fix_line(&finding.fix)),
+        Verdict::Dead { reason } => (format!("DEAD {reason}"), fix_detail(&finding.fix)),
+        Verdict::Suspect { reason, .. } => (format!("SUSPECT {reason}"), fix_detail(&finding.fix)),
         Verdict::Unverifiable { reason } => (format!("UNVERIFIABLE {reason}"), None),
+    })
+}
+
+fn write_entry(out: &mut String, finding: &Finding) {
+    let Some((class, detail)) = describe(finding) else {
+        return;
     };
     let file = display_path(finding);
     writeln!(
@@ -196,12 +224,80 @@ fn statuses(chain: &[Hop]) -> String {
         .join(" ")
 }
 
-fn fix_line(fix: &Fix) -> Option<String> {
+fn fix_detail(fix: &Fix) -> Option<Detail> {
     match fix {
         Fix::None => None,
-        Fix::Proposed(url) | Fix::Applied(url) => Some(format!("fix: {url}")),
-        Fix::Manual(reason) => Some(format!("manual fix: {reason}")),
+        Fix::Proposed(url) | Fix::Applied(url) => Some(Detail::Link {
+            label: "fix",
+            url: url.clone(),
+        }),
+        Fix::Manual(reason) => Some(Detail::Manual(reason.to_string())),
     }
+}
+
+/// `s` with `&`, `<`, `>`, `"` and `\'` replaced by their HTML entities.
+fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn link(url: &str) -> String {
+    let url = escape(url);
+    format!("<a href=\"{url}\">{url}</a>")
+}
+
+const STYLE: &str = "body{font-family:sans-serif;margin:1rem}\
+table{border-collapse:collapse}\
+th,td{border:1px solid #888;padding:.25rem .5rem;text-align:left;vertical-align:top}";
+
+/// Renders one self-contained HTML page: the summary line, then a table of the reported
+/// findings in the text report's order, or `No broken links.`. No trailing newline.
+#[must_use]
+pub fn render_html(findings: &[Finding], summary: &Summary) -> String {
+    let mut out = format!(
+        "<!doctype html>\n<meta charset=\"utf-8\">\n<title>rotguard report</title>\n\
+         <style>{STYLE}</style>\n<p>{}</p>\n",
+        escape(&summary_line(summary))
+    );
+    let entries: Vec<_> = reported(findings)
+        .into_iter()
+        .filter_map(|finding| describe(finding).map(|(class, detail)| (finding, class, detail)))
+        .collect();
+    if entries.is_empty() {
+        out.push_str("<p>No broken links.</p>");
+        return out;
+    }
+    out.push_str(
+        "<table><thead><tr><th>Location</th><th>Class</th><th>URL</th><th>Fix</th></tr></thead>\n<tbody>\n",
+    );
+    for (finding, class, detail) in entries {
+        let fix = match detail {
+            None => String::new(),
+            Some(Detail::Link { label, url }) => format!("{label}: {}", link(&url)),
+            Some(manual @ Detail::Manual(_)) => escape(&manual.to_string()),
+        };
+        writeln!(
+            out,
+            "<tr><td>{}:{}</td><td>{}</td><td>{}</td><td>{fix}</td></tr>",
+            escape(&display_path(finding)),
+            finding.link.line,
+            escape(&class),
+            link(&finding.link.url),
+        )
+        .expect("writing to a String cannot fail");
+    }
+    out.push_str("</tbody></table>");
+    out
 }
 
 #[cfg(test)]
@@ -467,5 +563,97 @@ mod tests {
             "checked 4: ok 1, permanent 1, temporary 0, dead 1, suspect 1, unverifiable 0, ignored 0"
         );
         assert!(!out.ends_with('\n'));
+    }
+
+    #[test]
+    fn escape_maps_all_five_characters() {
+        assert_eq!(escape(r#"&<>"'"#), "&amp;&lt;&gt;&quot;&#39;");
+    }
+
+    #[test]
+    fn html_page_has_a_row_per_finding_with_escaped_cells() {
+        let findings = [
+            finding(
+                "a.md",
+                1,
+                permanent(),
+                Fix::Proposed("https://new.test/x?a=1&b=2".into()),
+            ),
+            finding(
+                "a.md",
+                2,
+                Verdict::Temporary {
+                    chain: vec![hop("https://old.test/x", 302), hop("https://t.test/y", 200)],
+                    final_url: Url::parse("https://t.test/y").unwrap(),
+                },
+                Fix::None,
+            ),
+            finding(
+                "a.md",
+                3,
+                dead(),
+                Fix::Manual(ManualReason::Archive(NoFix::NoCapture)),
+            ),
+            finding(
+                "a.md",
+                4,
+                Verdict::Unverifiable {
+                    reason: "<dead>".into(),
+                },
+                Fix::None,
+            ),
+            finding("a.md", 5, Verdict::Ok { chain: vec![] }, Fix::None),
+            finding(
+                "a.md",
+                6,
+                Verdict::Suspect {
+                    chain: vec![
+                        hop("https://old.test/x", 301),
+                        hop("https://old.test/", 200),
+                    ],
+                    reason: "redirect to root".into(),
+                },
+                Fix::Proposed("https://web.test/snap".into()),
+            ),
+        ];
+        let out = render_html(&findings, &summary());
+        assert!(out.starts_with(
+            "<!doctype html>\n<meta charset=\"utf-8\">\n<title>rotguard report</title>\n<style>"
+        ));
+        assert!(!out.ends_with('\n'));
+        let body = out.split("<tbody>").nth(1).unwrap();
+        assert_eq!(body.matches("<tr>").count(), 5);
+        let a = r#"<a href="https://old.test/x#frag">https://old.test/x#frag</a>"#;
+        let cases = [
+            format!(
+                "<tr><td>a.md:1</td><td>PERMANENT REDIRECT 301 200</td><td>{a}</td><td>fix: <a href=\"https://new.test/x?a=1&amp;b=2\">https://new.test/x?a=1&amp;b=2</a></td></tr>"
+            ),
+            format!(
+                "<tr><td>a.md:2</td><td>TEMPORARY REDIRECT 302 200</td><td>{a}</td><td>final: <a href=\"https://t.test/y\">https://t.test/y</a></td></tr>"
+            ),
+            format!(
+                "<tr><td>a.md:3</td><td>DEAD 404</td><td>{a}</td><td>manual fix: no archived copy</td></tr>"
+            ),
+            format!(
+                "<tr><td>a.md:4</td><td>UNVERIFIABLE &lt;dead&gt;</td><td>{a}</td><td></td></tr>"
+            ),
+            format!(
+                "<tr><td>a.md:6</td><td>SUSPECT redirect to root</td><td>{a}</td><td>fix: <a href=\"https://web.test/snap\">https://web.test/snap</a></td></tr>"
+            ),
+        ];
+        for case in cases {
+            assert!(out.contains(&case), "{case}\n{out}");
+        }
+        assert!(out.contains(&format!("<p>{}</p>", summary_line(&summary()))));
+    }
+
+    #[test]
+    fn html_page_without_findings_says_so() {
+        let out = render_html(
+            &[finding("a.md", 1, Verdict::Ok { chain: vec![] }, Fix::None)],
+            &summary(),
+        );
+        assert!(out.ends_with("<p>No broken links.</p>"));
+        assert!(!out.contains("<table"));
     }
 }

@@ -141,7 +141,6 @@ async fn format_s3_json_reports_applied_and_manual_fixes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn format_s4_html_is_a_self_contained_table() {
     let w = mixed_world().await;
     let new = w.url("/new");
@@ -169,7 +168,6 @@ async fn format_s4_html_is_a_self_contained_table() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S5"]
 async fn format_s5_html_without_findings_has_no_table() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/a", page("Alpha", "an ordinary page")))
@@ -183,7 +181,6 @@ async fn format_s5_html_without_findings_has_no_table() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn format_s6_html_escapes_urls() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/x", status(404))).await;
@@ -217,7 +214,6 @@ async fn format_s7_json_keeps_exit_code_and_stderr() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S8"]
 async fn format_s8_unknown_format_is_rejected_before_any_request() {
     let w = dead_world().await;
 

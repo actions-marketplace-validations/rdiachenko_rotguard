@@ -98,6 +98,8 @@ pub enum Format {
     Text,
     /// One JSON object with the findings and the summary.
     Json,
+    /// One self-contained HTML page with the summary and a table of findings.
+    Html,
 }
 
 /// `err` and each of its sources, joined by ": ".
