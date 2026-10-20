@@ -759,6 +759,9 @@ fn lex_yaml(block: &str) -> Vec<Token> {
     // Index of the plain token the previous line pushed, which a continuation line
     // turns into part of a longer, non-URL scalar.
     let mut plain: Option<usize> = None;
+    // Indent of a key whose value has not started: a plain scalar on the next line is
+    // that key's value, so its continuation lines are measured against the key.
+    let mut valueless: Option<usize> = None;
     for line in block.split_inclusive('\n') {
         let text = line.trim_end_matches(['\n', '\r']);
         // A tab counts as a space here, as it does everywhere a line's leading
@@ -779,12 +782,37 @@ fn lex_yaml(block: &str) -> Vec<Token> {
             base += line.len();
             continue;
         }
+        if valueless.is_some() && (text.trim().is_empty() || body.starts_with('#')) {
+            base += line.len();
+            continue;
+        }
         let before = tokens.len();
-        inside = lex_yaml_line(text, base, &mut tokens);
+        let key_indent = valueless.take();
+        inside = match lex_yaml_line(text, base, &mut tokens) {
+            Line::Done => None,
+            Line::Open(n) => Some(n),
+            Line::KeyOnly(n) => {
+                valueless = Some(n);
+                None
+            }
+            Line::Scalar(n) => Some(key_indent.filter(|&k| indent > k).unwrap_or(n)),
+        };
         plain = (tokens.len() > before && tokens[before].quote == Quote::Bare).then_some(before);
         base += line.len();
     }
     tokens
+}
+
+/// What a lexed YAML line leaves open for the lines below it.
+enum Line {
+    /// Nothing: the line's value, if any, ended on it.
+    Done,
+    /// A scalar that following lines continue while indented deeper than this.
+    Open(usize),
+    /// A key with no value, or only node properties, at this indent.
+    KeyOnly(usize),
+    /// Like `Open`, for a plain scalar that is the whole line (no key, no `- `).
+    Scalar(usize),
 }
 
 /// Whether `s` is a block scalar header: `|` or `>` with optional chomping/indent marks.
@@ -793,9 +821,9 @@ fn is_block_indicator(s: &str) -> bool {
         .is_some_and(|rest| rest.chars().all(|c| matches!(c, '+' | '-' | '0'..='9')))
 }
 
-/// Lexes one line. Returns the indent that following lines must exceed to still belong
+/// Lexes one line. Reports the indent that following lines must exceed to still belong
 /// to a scalar that began on this line.
-fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Option<usize> {
+fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Line {
     let bytes = line.as_bytes();
     let skip_spaces = |mut p: usize| {
         while p < bytes.len() && bytes[p] == b' ' {
@@ -826,14 +854,18 @@ fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Option<usi
             }
         }
         if pos >= bytes.len() || bytes[pos] == b'#' {
-            return None;
+            return if had_key {
+                Line::KeyOnly(first)
+            } else {
+                Line::Done
+            };
         }
         let parent = if had_key { first } else { indent };
         let c = bytes[pos];
         if c == b'\'' || c == b'"' {
             let Some(end) = closing_quote(line, pos + 1, c, c == b'"', c == b'\'') else {
                 // A quoted string running over the line end continues below.
-                return Some(parent);
+                return Line::Open(parent);
             };
             let after = skip_spaces(end + 1);
             let is_key =
@@ -851,7 +883,7 @@ fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Option<usi
                     Quote::Single
                 },
             });
-            return None;
+            return Line::Done;
         }
         // A comment starts at `#` preceded by a space or a tab.
         let stop = line[pos..]
@@ -874,7 +906,11 @@ fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Option<usi
                 quote: Quote::Bare,
             });
         }
-        return Some(parent);
+        return if had_key || first != indent {
+            Line::Open(parent)
+        } else {
+            Line::Scalar(parent)
+        };
     }
 }
 
@@ -1170,6 +1206,36 @@ mod tests {
         );
         assert!(page.links.iter().all(|l| l.verbatim));
         assert_slices(text, &page);
+    }
+
+    #[test]
+    fn yaml_plain_scalar_under_a_valueless_key_continues_against_the_key() {
+        for head in ["a: &x", "a:", "a: !t"] {
+            let text =
+                format!("---\n{head}\n  https://a.test/p\n  more\nb: https://a.test/p\n---\n");
+            let page = run(&text);
+            assert_eq!(page.links.len(), 1, "{head}");
+            let l = &page.links[0];
+            assert_eq!((l.line, l.verbatim), (5, true), "{head}");
+            assert_eq!(&text[l.span.clone()], "https://a.test/p", "{head}");
+            assert_eq!(text[..l.span.start].matches('\n').count(), 4, "{head}");
+        }
+    }
+
+    #[test]
+    fn yaml_nested_structures_under_a_valueless_key_keep_their_links() {
+        for body in [
+            "a:\n  https://a.test/p\nb: x\n",
+            "a:\n  - https://a.test/p\n  - more\n",
+            "a:\n  url: https://a.test/p\n",
+        ] {
+            let text = format!("---\n{body}---\n");
+            let page = run(&text);
+            assert_eq!(page.links.len(), 1, "{body:?}");
+            let l = &page.links[0];
+            assert_eq!((l.line, l.verbatim), (3, true), "{body:?}");
+            assert_eq!(&text[l.span.clone()], "https://a.test/p", "{body:?}");
+        }
     }
 
     #[test]
