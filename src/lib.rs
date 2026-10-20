@@ -96,6 +96,8 @@ pub struct Args {
 pub enum Format {
     /// One line per finding, then a summary line.
     Text,
+    /// One JSON object with the findings and the summary.
+    Json,
 }
 
 /// `err` and each of its sources, joined by ": ".

@@ -60,7 +60,6 @@ async fn format_s1_text_is_the_default() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn format_s2_json_lists_findings_and_summary() {
     let w = mixed_world().await;
     let (old, new) = (w.url("/old"), w.url("/new"));
@@ -107,7 +106,6 @@ async fn format_s2_json_lists_findings_and_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn format_s3_json_reports_applied_and_manual_fixes() {
     let w = World::new().await;
     w.serve(
@@ -204,7 +202,6 @@ async fn format_s6_html_escapes_urls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S7"]
 async fn format_s7_json_keeps_exit_code_and_stderr() {
     let w = dead_world().await;
 

@@ -2,11 +2,14 @@
 
 use std::fmt::Write as _;
 
+use serde::Serialize;
+use url::Url;
+
 use crate::check::{Hop, Verdict};
 use crate::{Finding, Fix, Format};
 
 /// Counts of distinct URLs by outcome, computed by the caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct Summary {
     pub checked: usize,
     pub ok: usize,
@@ -23,6 +26,7 @@ pub struct Summary {
 pub fn render_as(format: Format, findings: &[Finding], summary: &Summary) -> String {
     match format {
         Format::Text => render(findings, summary),
+        Format::Json => render_json(findings, summary),
     }
 }
 
@@ -31,11 +35,8 @@ pub fn render_as(format: Format, findings: &[Finding], summary: &Summary) -> Str
 /// Findings whose verdict is `Ok` are not reported. The result has no trailing newline.
 #[must_use]
 pub fn render(findings: &[Finding], summary: &Summary) -> String {
-    let mut sorted: Vec<&Finding> = findings.iter().collect();
-    sorted.sort_by(|a, b| (&a.file, a.link.line).cmp(&(&b.file, b.link.line)));
-
     let mut out = String::new();
-    for finding in sorted {
+    for finding in reported(findings) {
         write_entry(&mut out, finding);
     }
     let Summary {
@@ -57,6 +58,109 @@ pub fn render(findings: &[Finding], summary: &Summary) -> String {
     out
 }
 
+/// The non-ok findings, sorted by file then line.
+fn reported(findings: &[Finding]) -> Vec<&Finding> {
+    let mut sorted: Vec<&Finding> = findings
+        .iter()
+        .filter(|finding| !matches!(finding.verdict, Verdict::Ok { .. }))
+        .collect();
+    sorted.sort_by(|a, b| (&a.file, a.link.line).cmp(&(&b.file, b.link.line)));
+    sorted
+}
+
+/// The path with `/` separators on every platform.
+fn display_path(finding: &Finding) -> String {
+    finding
+        .file
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+#[derive(Serialize)]
+struct Report<'a> {
+    findings: Vec<Row<'a>>,
+    summary: &'a Summary,
+}
+
+/// One finding as it appears in the JSON report.
+#[derive(Serialize)]
+struct Row<'a> {
+    file: String,
+    line: u32,
+    url: &'a str,
+    class: &'static str,
+    chain: &'a [Hop],
+    reason: Option<&'a str>,
+    final_url: Option<&'a Url>,
+    fix: Option<FixView<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum FixView<'a> {
+    Proposed { url: &'a str },
+    Applied { url: &'a str },
+    Manual { reason: String },
+}
+
+impl<'a> From<&'a Fix> for Option<FixView<'a>> {
+    fn from(fix: &'a Fix) -> Self {
+        match fix {
+            Fix::None => None,
+            Fix::Proposed(url) => Some(FixView::Proposed { url }),
+            Fix::Applied(url) => Some(FixView::Applied { url }),
+            Fix::Manual(reason) => Some(FixView::Manual {
+                reason: reason.to_string(),
+            }),
+        }
+    }
+}
+
+fn rows(findings: &[Finding]) -> Vec<Row<'_>> {
+    reported(findings)
+        .into_iter()
+        .map(|finding| {
+            let (class, chain, reason, final_url) = match &finding.verdict {
+                // `reported` drops ok findings.
+                Verdict::Ok { .. } => unreachable!("ok findings are not reported"),
+                Verdict::Permanent { chain, .. } => ("permanent", chain.as_slice(), None, None),
+                Verdict::Temporary { chain, final_url } => {
+                    ("temporary", chain.as_slice(), None, Some(final_url))
+                }
+                Verdict::Dead { reason } => ("dead", [].as_slice(), Some(reason.as_str()), None),
+                Verdict::Suspect { chain, reason } => {
+                    ("suspect", chain.as_slice(), Some(reason.as_str()), None)
+                }
+                Verdict::Unverifiable { reason } => {
+                    ("unverifiable", [].as_slice(), Some(reason.as_str()), None)
+                }
+            };
+            Row {
+                file: display_path(finding),
+                line: finding.link.line,
+                url: &finding.link.url,
+                class,
+                chain,
+                reason,
+                final_url,
+                fix: (&finding.fix).into(),
+            }
+        })
+        .collect()
+}
+
+/// Renders `{"findings": [...], "summary": {...}}` as pretty JSON, without a trailing newline.
+#[must_use]
+pub fn render_json(findings: &[Finding], summary: &Summary) -> String {
+    let report = Report {
+        findings: rows(findings),
+        summary,
+    };
+    serde_json::to_string_pretty(&report).expect("the report types always serialize")
+}
+
 fn write_entry(out: &mut String, finding: &Finding) {
     let (class, detail) = match &finding.verdict {
         Verdict::Ok { .. } => return,
@@ -72,12 +176,7 @@ fn write_entry(out: &mut String, finding: &Finding) {
         Verdict::Suspect { reason, .. } => (format!("SUSPECT {reason}"), fix_line(&finding.fix)),
         Verdict::Unverifiable { reason } => (format!("UNVERIFIABLE {reason}"), None),
     };
-    let file = finding
-        .file
-        .components()
-        .map(|part| part.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/");
+    let file = display_path(finding);
     writeln!(
         out,
         "{file}:{}  {class}  {}",
@@ -107,7 +206,7 @@ fn fix_line(fix: &Fix) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use url::Url;
+    use serde_json::json;
 
     use super::*;
     use crate::ManualReason;
@@ -282,6 +381,82 @@ mod tests {
                 "{name}: {out}"
             );
         }
+    }
+
+    #[test]
+    fn json_rows_cover_each_class_and_fix_kind() {
+        let chain = |a| vec![hop("https://old.test/x", a), hop("https://t.test/y", 200)];
+        let hops = |a| json!([{"url": "https://old.test/x", "status": a}, {"url": "https://t.test/y", "status": 200}]);
+        let findings = [
+            finding(
+                "d/u.md",
+                1,
+                Verdict::Unverifiable {
+                    reason: "deadline".into(),
+                },
+                Fix::None,
+            ),
+            finding(
+                "d/t.md",
+                1,
+                Verdict::Temporary {
+                    chain: chain(302),
+                    final_url: Url::parse("https://t.test/y").unwrap(),
+                },
+                Fix::None,
+            ),
+            finding(
+                "d/s.md",
+                1,
+                Verdict::Suspect {
+                    chain: chain(301),
+                    reason: "redirect to root".into(),
+                },
+                Fix::Manual(ManualReason::Archive(NoFix::NoCapture)),
+            ),
+            finding(
+                "d/p.md",
+                1,
+                Verdict::Permanent {
+                    chain: chain(301),
+                    fix: Url::parse("https://t.test/y").unwrap(),
+                },
+                Fix::Applied("https://t.test/y".into()),
+            ),
+            finding("d/o.md", 1, Verdict::Ok { chain: chain(200) }, Fix::None),
+            finding(
+                "d/a.md",
+                1,
+                dead(),
+                Fix::Proposed("https://web.test/s".into()),
+            ),
+        ];
+        let out = render_json(&findings, &summary());
+        assert!(!out.ends_with('\n'));
+        let row = |file: &str,
+                   class: &str,
+                   chain: serde_json::Value,
+                   reason: serde_json::Value,
+                   final_url: serde_json::Value,
+                   fix: serde_json::Value| {
+            json!({"file": file, "line": 1, "url": "https://old.test/x#frag", "class": class,
+                "chain": chain, "reason": reason, "final_url": final_url, "fix": fix})
+        };
+        let expected = json!({
+            "findings": [
+                row("d/a.md", "dead", json!([]), json!("404"), json!(null), json!({"kind": "proposed", "url": "https://web.test/s"})),
+                row("d/p.md", "permanent", hops(301), json!(null), json!(null), json!({"kind": "applied", "url": "https://t.test/y"})),
+                row("d/s.md", "suspect", hops(301), json!("redirect to root"), json!(null), json!({"kind": "manual", "reason": "no archived copy"})),
+                row("d/t.md", "temporary", hops(302), json!(null), json!("https://t.test/y"), json!(null)),
+                row("d/u.md", "unverifiable", json!([]), json!("deadline"), json!(null), json!(null)),
+            ],
+            "summary": {"checked": 4, "ok": 1, "permanent": 1, "temporary": 0, "dead": 1,
+                "suspect": 1, "unverifiable": 0, "ignored": 0},
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+            expected
+        );
     }
 
     #[test]
