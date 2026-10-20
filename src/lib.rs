@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::archive::{Archive, NoFix};
 use crate::check::Verdict;
 use crate::config::Config;
 use crate::extract::{Link, Page};
+use crate::progress::{Phase, Progress};
 use crate::report::Summary;
 
 pub mod apply;
@@ -118,7 +120,8 @@ pub fn run(args: Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg));
+    let mut progress = Progress::stderr();
+    let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg, &mut progress));
     // Hung requests must not hold the process past the deadline.
     runtime.shutdown_background();
     let apply_errors = if args.apply {
@@ -208,7 +211,11 @@ struct Occurrence<'a> {
     url: Url,
 }
 
-async fn check_pages(pages: &[(PathBuf, Page)], cfg: &Config) -> (Vec<Finding>, Summary) {
+async fn check_pages(
+    pages: &[(PathBuf, Page)],
+    cfg: &Config,
+    progress: &mut Progress<io::Stderr>,
+) -> (Vec<Finding>, Summary) {
     let site_host = cfg.site_url.host_str();
     let mut occurrences = Vec::new();
     let mut ignored = HashSet::new();
@@ -239,7 +246,17 @@ async fn check_pages(pages: &[(PathBuf, Page)], cfg: &Config) -> (Vec<Finding>, 
     distinct.dedup();
 
     let deadline = Instant::now() + cfg.deadline;
-    let verdicts = check::check_all(distinct.clone(), cfg, deadline).await;
+    let hosts = distinct
+        .iter()
+        .filter_map(Url::host_str)
+        .collect::<HashSet<_>>()
+        .len();
+    progress.start(Phase::Check { hosts }, distinct.len());
+    let verdicts = check::check_all(distinct.clone(), cfg, deadline, |done| {
+        progress.tick(done);
+    })
+    .await;
+    progress.finish();
 
     let run_date = chrono::Local::now().date_naive();
     let lookups: HashSet<(Url, NaiveDate)> = occurrences

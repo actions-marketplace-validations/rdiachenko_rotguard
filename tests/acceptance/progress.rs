@@ -16,7 +16,6 @@ fn line_index(stderr: &str, pattern: &str) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn progress_s1_piped_run_prints_start_and_end_lines_on_stderr() {
     let w = World::new().await;
     w.serve(
