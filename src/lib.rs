@@ -24,6 +24,7 @@ pub mod archive;
 pub mod check;
 pub mod config;
 pub mod extract;
+pub mod progress;
 pub mod report;
 
 /// One non-ok occurrence of a URL in a site file.
