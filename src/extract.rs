@@ -528,6 +528,19 @@ fn decode_entities(s: &str) -> String {
 
 /// Finds the leading front-matter block: its format and the byte range between delimiters.
 fn front_matter(text: &str) -> Option<(Format, Range<usize>)> {
+    // Only the first U+FEFF is a byte-order mark; it is not part of the
+    // delimiter line, and the range stays an offset into the original text.
+    let shift = if text.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let (format, block) = front_matter_unshifted(&text[shift..])?;
+    Some((format, block.start + shift..block.end + shift))
+}
+
+/// Finds the front-matter block in `text`, which has no byte-order mark.
+fn front_matter_unshifted(text: &str) -> Option<(Format, Range<usize>)> {
     let (format, delim) = if text.starts_with("+++") {
         (Format::Toml, "+++")
     } else if text.starts_with("---") {
@@ -870,6 +883,68 @@ mod tests {
                 assert_eq!(&text[l.span.clone()], l.url);
             }
         }
+    }
+
+    #[test]
+    fn yaml_front_matter_after_bom() {
+        let text = "\u{feff}---\ndate: 2020-01-02\nsource: 'https://a.test/x'\n---\n";
+        let page = run(text);
+        assert_eq!(page.date, NaiveDate::from_ymd_opt(2020, 1, 2));
+        assert_eq!(page.links.len(), 1);
+        let link = &page.links[0];
+        assert_eq!(
+            link.ctx,
+            Ctx::FrontMatter {
+                quote: Quote::Single
+            }
+        );
+        assert_eq!(&text[link.span.clone()], "https://a.test/x");
+        assert_eq!(link.line, 3);
+    }
+
+    #[test]
+    fn second_bom_is_not_front_matter() {
+        let text = "\u{feff}\u{feff}---\na: 'https://a.test/x'\n---\n";
+        let page = run(text);
+        assert!(
+            page.links
+                .iter()
+                .all(|l| !matches!(l.ctx, Ctx::FrontMatter { .. }))
+        );
+    }
+
+    #[test]
+    fn bom_without_front_matter_keeps_body_links() {
+        let text = "\u{feff}see https://m.test/a\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        let link = &page.links[0];
+        assert_eq!(link.ctx, Ctx::MdText);
+        assert_eq!(&text[link.span.clone()], "https://m.test/a");
+        assert_eq!(link.line, 1);
+    }
+
+    #[test]
+    fn many_boms_do_not_overflow_the_stack() {
+        let text = format!("{}---\n---\n", "\u{feff}".repeat(50_000));
+        let _ = run(&text);
+    }
+
+    #[test]
+    fn toml_front_matter_after_bom() {
+        let text = "\u{feff}+++\ndate = 2020-01-02\nsource = \"https://a.test/x\"\n+++\n";
+        let page = run(text);
+        assert_eq!(page.date, NaiveDate::from_ymd_opt(2020, 1, 2));
+        assert_eq!(page.links.len(), 1);
+        let link = &page.links[0];
+        assert_eq!(
+            link.ctx,
+            Ctx::FrontMatter {
+                quote: Quote::Double
+            }
+        );
+        assert_eq!(&text[link.span.clone()], "https://a.test/x");
+        assert_eq!(link.line, 3);
     }
 
     #[test]
