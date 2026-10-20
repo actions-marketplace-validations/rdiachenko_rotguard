@@ -7,4 +7,4 @@
 - [idea] Decide R11's probe for a path ending in `/`: today `/docs/` probes the child `/docs/<token>`, not a sibling, so sites that send unknown sub-paths to the section index flag directory-style pages — src/check.rs:516 — from whittle/link-health, re-tagged 2026-10-20
 - [idea] Decide R19's detail line for a fix `--apply` could not write: today it prints `fix: <url>` like an applied one, and only stderr and exit 2 differ — src/report.rs:95 — from whittle/backlog-2026-10-20, re-tagged 2026-10-20
 - [idea] A `--quiet` (or `--progress`) flag to silence or force progress output on stderr — from shape progress-and-config, 2026-10-20
-- [idea] A `--format` flag for a structured report: JSON for scripts and CI (one object per finding plus the summary), maybe HTML for reading; the plain text report stays the default — from shape progress-and-config, 2026-10-20
+- [P2] README sample `TEMPORARY REDIRECT 302` should read `TEMPORARY REDIRECT 302 200`: the report prints every status in the chain — README.md:59 — from shape report-format, 2026-10-20
