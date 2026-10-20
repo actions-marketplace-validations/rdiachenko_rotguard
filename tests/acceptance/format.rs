@@ -4,8 +4,7 @@ use serde_json::{Value, json};
 
 use crate::support::{Capture, Cdx, Out, Routes, World, page, redirect, status};
 
-const SUMMARY: &str =
-    "checked 2: ok 0, permanent 1, temporary 0, dead 1, suspect 0, unverifiable 0, ignored 0";
+const SUMMARY: &str = "checked 2: ok 0, permanent 1, temporary 0, dead 1, suspect 0, unverifiable 0, blocked 0, ignored 0";
 
 /// `post.md` links `/old` (line 1, 301 to `/new`) and `/gone` (line 3, 404 with one capture).
 async fn mixed_world() -> World {
@@ -100,6 +99,7 @@ async fn format_s2_json_lists_findings_and_summary() {
             "dead": 1,
             "suspect": 0,
             "unverifiable": 0,
+            "blocked": 0,
             "ignored": 0,
         })
     );

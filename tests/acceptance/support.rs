@@ -611,6 +611,7 @@ pub struct Summary {
     pub dead: usize,
     pub suspect: usize,
     pub unverifiable: usize,
+    pub blocked: usize,
     pub ignored: usize,
 }
 
@@ -618,7 +619,7 @@ impl Summary {
     pub fn line(&self) -> String {
         format!(
             "checked {}: ok {}, permanent {}, temporary {}, dead {}, suspect {}, \
-             unverifiable {}, ignored {}",
+             unverifiable {}, blocked {}, ignored {}",
             self.checked,
             self.ok,
             self.permanent,
@@ -626,6 +627,7 @@ impl Summary {
             self.dead,
             self.suspect,
             self.unverifiable,
+            self.blocked,
             self.ignored
         )
     }

@@ -18,6 +18,7 @@ pub struct Summary {
     pub dead: usize,
     pub suspect: usize,
     pub unverifiable: usize,
+    pub blocked: usize,
     pub ignored: usize,
 }
 
@@ -53,11 +54,13 @@ fn summary_line(summary: &Summary) -> String {
         dead,
         suspect,
         unverifiable,
+        blocked,
         ignored,
     } = summary;
     format!(
         "checked {checked}: ok {ok}, permanent {permanent}, temporary {temporary}, \
-         dead {dead}, suspect {suspect}, unverifiable {unverifiable}, ignored {ignored}"
+         dead {dead}, suspect {suspect}, unverifiable {unverifiable}, \
+         blocked {blocked}, ignored {ignored}"
     )
 }
 
@@ -547,7 +550,7 @@ mod tests {
                 row("d/u.md", "unverifiable", json!([]), json!("deadline"), json!(null), json!(null)),
             ],
             "summary": {"checked": 4, "ok": 1, "permanent": 1, "temporary": 0, "dead": 1,
-                "suspect": 1, "unverifiable": 0, "ignored": 0},
+                "suspect": 1, "unverifiable": 0, "blocked": 0, "ignored": 0},
         });
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&out).unwrap(),
@@ -560,7 +563,7 @@ mod tests {
         let out = render(&[finding("a.md", 1, dead(), Fix::None)], &summary());
         assert_eq!(
             out.lines().last().unwrap(),
-            "checked 4: ok 1, permanent 1, temporary 0, dead 1, suspect 1, unverifiable 0, ignored 0"
+            "checked 4: ok 1, permanent 1, temporary 0, dead 1, suspect 1, unverifiable 0, blocked 0, ignored 0"
         );
         assert!(!out.ends_with('\n'));
     }

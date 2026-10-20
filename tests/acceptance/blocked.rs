@@ -59,7 +59,6 @@ async fn blocked_s1_wall_is_counted_not_reported() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn blocked_s2_lone_403_stays_unverifiable() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/forbidden", status(403)))

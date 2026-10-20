@@ -57,7 +57,7 @@ async fn s31_entries_sorted_and_summary_counts() {
         out.stdout.lines().last(),
         Some(
             "checked 4: ok 1, permanent 1, temporary 0, dead 1, suspect 1, unverifiable 0, \
-             ignored 0"
+             blocked 0, ignored 0"
         )
     );
 }
