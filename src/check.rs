@@ -279,6 +279,15 @@ pub enum Verdict {
     },
 }
 
+/// Whether a non-root URL's chain visits the root, which a host with `soft404` treats as a
+/// removed page.
+fn redirects_to_root(chain: &[Hop], host: &HostConfig) -> bool {
+    host.soft404
+        && chain.split_first().is_some_and(|(first, rest)| {
+            first.url.path() != "/" && rest.iter().any(|hop| hop.url.path() == "/")
+        })
+}
+
 /// Classifies a fetch outcome by its status and redirect chain.
 ///
 /// A non-root URL that redirects to the site root is a soft-404 suspect unless `host` turns
@@ -293,6 +302,16 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
                 reason: FetchError::Dns.to_string(),
             };
         }
+        Err(
+            FetchError::NoLocation(chain)
+            | FetchError::Loop(chain)
+            | FetchError::TooManyHops(chain),
+        ) if redirects_to_root(chain, host) => {
+            return Verdict::Suspect {
+                chain: chain.clone(),
+                reason: "redirect to root".to_owned(),
+            };
+        }
         Err(err) => return unverifiable(err.to_string()),
     };
     let chain = &fetched.chain;
@@ -304,15 +323,10 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
             reason: last.status.to_string(),
         },
         401 | 403 | 429 | 999 | 500..=599 => unverifiable(last.status.to_string()),
-        _ if host.soft404
-            && chain[0].url.path() != "/"
-            && chain[1..].iter().any(|hop| hop.url.path() == "/") =>
-        {
-            Verdict::Suspect {
-                chain: chain.clone(),
-                reason: "redirect to root".to_owned(),
-            }
-        }
+        _ if redirects_to_root(chain, host) => Verdict::Suspect {
+            chain: chain.clone(),
+            reason: "redirect to root".to_owned(),
+        },
         200..=299 => {
             let leading = chain
                 .iter()
@@ -1280,6 +1294,42 @@ mod tests {
         let outcome = chain_of(vec![deep_hop(301), root_hop(400)]);
         let off = HostConfig { soft404: false };
         assert_eq!(classify(&outcome, &off), unverifiable("400"));
+    }
+
+    #[test]
+    fn a_failed_chain_through_the_root_is_suspect() {
+        let chain = vec![deep_hop(301), root_hop(301)];
+        for err in [
+            FetchError::Loop(chain.clone()),
+            FetchError::NoLocation(chain.clone()),
+            FetchError::TooManyHops(chain.clone()),
+        ] {
+            let outcome = Err(err.clone());
+            assert_eq!(
+                classify(&outcome, &HostConfig::default()),
+                Verdict::Suspect {
+                    chain: chain.clone(),
+                    reason: "redirect to root".to_owned(),
+                },
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_chain_through_the_root_is_unverifiable_when_soft404_is_off() {
+        let off = HostConfig { soft404: false };
+        let outcome = Err(FetchError::Loop(vec![deep_hop(301), root_hop(301)]));
+        assert_eq!(classify(&outcome, &off), unverifiable("redirect loop"));
+    }
+
+    #[test]
+    fn a_failed_chain_that_never_visits_the_root_is_unverifiable() {
+        let outcome = Err(FetchError::Loop(vec![deep_hop(301), deep_hop(301)]));
+        assert_eq!(
+            classify(&outcome, &HostConfig::default()),
+            unverifiable("redirect loop")
+        );
     }
 
     fn config_for(extra: &str) -> Config {
