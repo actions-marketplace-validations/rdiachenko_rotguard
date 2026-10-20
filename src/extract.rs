@@ -3,7 +3,6 @@
 //! Front matter values and markdown body links (inline links and images, reference
 //! definitions, autolinks and `href`/`src` in raw HTML) and bare URLs in text are covered.
 
-use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -117,15 +116,21 @@ fn front_matter_links(
     };
     page.date = values.date;
 
-    let mut remaining = values.urls;
+    let all_urls = values.urls;
+    let mut remaining = all_urls.clone();
     let tokens = match format {
         Format::Toml => lex_toml(block_text),
         Format::Yaml => lex_yaml(block_text),
     };
     // The lexer can emit a phantom token whose text equals a real value elsewhere, and
-    // pairing by text would let it take the verbatim span. When a URL has more matching
-    // tokens than values, no link for it is applied.
-    let ambiguous = ambiguous_urls(format, block_text, &tokens, &remaining);
+    // pairing by text would let it take the verbatim span. A link is verbatim only when
+    // the parser reads the token's span as exactly one of the values.
+    let verify = Verify {
+        format,
+        block_text,
+        date_key: &cfg.date_key,
+        urls: &all_urls,
+    };
     let mut unmatched = Vec::new();
     for token in tokens {
         let content = &block_text[token.content.clone()];
@@ -137,7 +142,7 @@ fn front_matter_links(
                 content,
                 span,
                 Ctx::FrontMatter { quote: token.quote },
-                !ambiguous.contains(content),
+                verify.is_verbatim(content, &token.content),
             ));
         } else {
             unmatched.push(token);
@@ -179,27 +184,33 @@ fn front_matter_links(
     }
 }
 
-/// URLs that more lexer tokens match, raw or decoded, than the parser has values.
-fn ambiguous_urls(
+/// What the parser read from a front-matter block, to confirm a token's span is a value.
+struct Verify<'a> {
     format: Format,
-    block_text: &str,
-    tokens: &[Token],
-    urls: &[String],
-) -> HashSet<String> {
-    urls.iter()
-        .filter(|&url| {
-            let matching = tokens
-                .iter()
-                .filter(|token| {
-                    let content = &block_text[token.content.clone()];
-                    content == url.as_str()
-                        || decode(format, content, token.quote).is_some_and(|d| d == *url)
-                })
-                .count();
-            matching > urls.iter().filter(|u| *u == url).count()
-        })
-        .cloned()
-        .collect()
+    block_text: &'a str,
+    date_key: &'a str,
+    urls: &'a [String],
+}
+
+impl Verify<'_> {
+    /// Whether replacing `span` with a sentinel URL makes the parser read the sentinel
+    /// exactly once and one copy fewer of `url`. A span inside a larger scalar, or a value
+    /// that is also read through an alias, fails.
+    fn is_verbatim(&self, url: &str, span: &Range<usize>) -> bool {
+        let sentinel = (0..)
+            .map(|n| format!("https://rotguard-sentinel.invalid/{n}"))
+            .find(|s| !self.block_text.contains(s.as_str()))
+            .expect("an unbounded range has an unused sentinel");
+        let mut probe = String::with_capacity(self.block_text.len() + sentinel.len());
+        probe.push_str(&self.block_text[..span.start]);
+        probe.push_str(&sentinel);
+        probe.push_str(&self.block_text[span.end..]);
+        let Some(values) = parse_values(self.format, &probe, self.date_key) else {
+            return false;
+        };
+        let count = |urls: &[String], target: &str| urls.iter().filter(|u| *u == target).count();
+        count(&values.urls, &sentinel) == 1 && count(&values.urls, url) + 1 == count(self.urls, url)
+    }
 }
 
 fn link(lines: &Lines, url: &str, span: Range<usize>, ctx: Ctx, verbatim: bool) -> Link {
@@ -1012,6 +1023,62 @@ mod tests {
     fn phantom_token_after_property_only_line_is_not_applied() {
         let text = "---\na:\n  &x\n  https://a.test/p\n  more\nb: https://a.test/p\n---\n";
         assert_phantom_not_applied(text, "a:", "\nb:");
+    }
+
+    #[test]
+    fn phantom_token_with_real_copy_in_flow_list_is_not_applied() {
+        let text = "---\na:\n  &x\n  https://a.test/p\n  more\ntags: [https://a.test/p]\n---\n";
+        assert_phantom_not_applied(text, "a:", "\ntags:");
+    }
+
+    #[test]
+    fn phantom_token_with_real_copy_in_flow_map_is_not_applied() {
+        let text = "---\na:\n  &x\n  https://a.test/p\n  more\nb: {u: https://a.test/p}\n---\n";
+        assert_phantom_not_applied(text, "a:", "\nb:");
+    }
+
+    #[test]
+    fn phantom_token_in_sequence_entry_with_real_flow_copy_is_not_applied() {
+        let text = "---\nl:\n  - &f\n    https://a.test/p\n    more\nm: [https://a.test/p]\n---\n";
+        assert_phantom_not_applied(text, "l:", "\nm:");
+    }
+
+    #[test]
+    fn phantom_token_in_quoted_scalar_with_real_flow_copy_is_not_applied() {
+        let text = "---\na:\n  \"x\n  https://a.test/p\n  y\"\nb: [https://a.test/p]\n---\n";
+        assert_phantom_not_applied(text, "a:", "\nb:");
+    }
+
+    #[test]
+    fn phantom_token_with_real_copy_through_alias_is_not_applied() {
+        let text =
+            "---\na:\n  &x\n  https://a.test/p\n  more\nb: &y https://a.test/p\nc: *y\n---\n";
+        assert_phantom_not_applied(text, "a:", "\nb:");
+    }
+
+    #[test]
+    fn toml_equal_urls_in_separate_keys_stay_verbatim() {
+        let text = "+++\na = \"https://a.test/p\"\nb = \"https://a.test/p\"\n+++\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 2);
+        assert!(page.links.iter().all(|l| l.verbatim));
+        assert_slices(text, &page);
+    }
+
+    #[test]
+    fn yaml_one_line_list_alone_is_checked_within_the_block() {
+        let text = "---\ntags: [https://a.test/p]\n---\n";
+        let page = run(text);
+        assert_eq!(page.links.len(), 1);
+        let link = &page.links[0];
+        assert_eq!(link.url, "https://a.test/p");
+        assert_slices(text, &page);
+        let open = text.find('[').expect("fixture has a list");
+        let close = text.find(']').expect("fixture closes the list");
+        assert!(
+            !link.verbatim || (link.span.start > open && link.span.end <= close),
+            "{link:?}"
+        );
     }
 
     #[test]
