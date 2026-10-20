@@ -917,6 +917,23 @@ mod tests {
     }
 
     #[test]
+    fn toml_url_inside_another_string_is_never_verbatim() {
+        // The lexer sees a token inside `a`'s multi-line string; only the sentinel re-parse
+        // stops `--apply` from writing there instead of at `b`.
+        let text = "+++\na = \"\"\"x \\\"\"\" \"https://a.test/p\" y\"\"\"\nb = \"https://a.test/p\"\n+++\n";
+        let page = run(text);
+        let b = text.find("b = ").unwrap();
+        assert!(
+            page.links.iter().any(|l| l.url == "https://a.test/p"),
+            "{text:?}"
+        );
+        for l in page.links.iter().filter(|l| l.verbatim) {
+            assert!(l.span.start > b, "verbatim span {:?} is inside `a`", l.span);
+        }
+        assert_slices(text, &page);
+    }
+
+    #[test]
     fn toml_comment_and_prefix_do_not_match() {
         let text =
             "+++\n# old 'M/a'\nsource = 'M/a'  # also 'M/a'\nother = 'M/ab'\n\"M/a\" = 1\n+++\n";
