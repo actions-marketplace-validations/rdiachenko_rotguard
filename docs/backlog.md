@@ -2,9 +2,6 @@
 
 - [idea] Weekly GitHub Action that runs `rotguard --apply` on the site and opens a PR with the fixes — from shape link-health, 2026-10-19
 - [idea] Run-state file so a link counts as dead only after N consecutive failing runs and flaky hosts stop flapping in CI — from shape link-health, 2026-10-19
-- [P2] Say whether a DNS failure gets the connection-error retries before the dead re-check — Design, Inside check.rs — from shape link-health, 2026-10-19
-- [P2] State that run appends the link's fragment to the fix when building each Finding (R8, R16) — Design, Data model — from shape link-health, 2026-10-19
-- [P2] Give Rust shapes for Finding and apply's per-file outcome — Design, Data model / Apply — from shape link-health, 2026-10-19
 - [P2] R23: add unwritable-fix rules for `Ctx::MdText` (`'`, trailing `.,;:!?)`) and `Ctx::Html` (record the attribute quote in `Ctx`) — Requirements R23, Extract — from shape link-health, 2026-10-19
 - [P2] `site_url`/`archive_url` accept non-http schemes and host-less URLs; require http(s) and a host — src/config.rs:94 — from whittle/link-health, 2026-10-19
 - [P2] `deadline_s` is unbounded, so `Instant + deadline` can overflow and panic; bound it or use `checked_add` — src/config.rs:116 — from whittle/link-health, 2026-10-19
@@ -14,7 +11,6 @@
 - [P2] A YAML value that is only an anchor or tag (`a: &x`, `a: !foo`) makes the lexer skip the nested block, so its URLs fall back to non-verbatim whole-block spans — src/extract.rs:421 — from whittle/link-health, 2026-10-19
 - [P2] Temporary resolver failures (EAI_AGAIN, "temporary failure in name resolution") map to `Dns`, which R7 makes DEAD; consider mapping them to `Connect` (unverifiable). The design accepts the local-DNS-outage case as-is, so this is a design change — src/check.rs:204 — from whittle/link-health, 2026-10-19
 - [P2] No unit test covers `FetchError::Dns`; it needs a resolver failure that doesn't use the network — src/check.rs — from whittle/link-health, 2026-10-19
-- [P2] S18 requires the body-similarity reason to contain "similar" (T2 ruling); the design only says "naming body similarity" — tests/acceptance/soft404.rs:96 — from whittle/link-health, 2026-10-19
 - [P2] `Out::entries` panics on any unindented stdout line that isn't a header or the summary, so an extra informational line fails every `entry()` test — tests/acceptance/support.rs:683 — from whittle/link-health, 2026-10-19
 - [P2] S37's unreadable-file case uses chmod 000, which root ignores (Docker CI), so the sub-case exits 0 there — tests/acceptance/report.rs:107 — from whittle/link-health, 2026-10-19
 - [P2] The Temporary row of `classify` is unit-tested only with a 307 first hop; add 302 → 200 and 303 → 200 rows — src/check.rs:722 — from whittle/link-health, 2026-10-19
@@ -28,7 +24,6 @@
 - [P2] Bare-URL trimming can split a trailing backslash escape (`see https://m.test/a\_` gives verbatim `…/a\`); never trim a character escaped by `\`, or trim the `\` with it — src/extract.rs:396 — from whittle/link-health, 2026-10-19
 - [P2] Redirect-to-root is checked only when the chain ends in 2xx; the design puts it before the catch-all, so `/deep` → 301 → `/` → 400 is Unverifiable instead of Suspect — src/check.rs:300 — from whittle/link-health, 2026-10-19
 - [P2] Any hop through `/` makes a URL Suspect, even when the chain ends on a real page (`/archives/123` → `/?p=123` → `/2020/post/`), losing a Permanent fix; R10 is ambiguous; consider testing only the final URL — src/check.rs:303 — from whittle/link-health, 2026-10-19
-- [P2] No `check_all` test proves the `[hosts]` lookup is used (a lookup that always returned the default would pass until S21) — src/check.rs:353 — from whittle/link-health, 2026-10-19
 - [P2] The visible-text regex goes quadratic on a hostile body (`<script></script><!--` repeated to 256 KB: 2.9 s on a tokio worker, so the deadline can't interrupt it); strip blocks with `find` for each closer, or use spawn_blocking — src/check.rs:508 — from whittle/link-health, 2026-10-19
 - [P2] For a path ending in `/` the probe is a child (`/docs/` → `/docs/<token>`), not a sibling, so sites that redirect unknown sub-paths to the section index flag directory-style pages; R11 is ambiguous about the empty last segment — src/check.rs:447 — from whittle/link-health, 2026-10-19
 - [P2] No test covers the "probe: same final URL" signal — src/check.rs:477 — from whittle/link-health, 2026-10-19
