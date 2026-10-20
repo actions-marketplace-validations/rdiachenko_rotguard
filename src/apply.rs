@@ -55,7 +55,22 @@ fn apply_file(path: &Path, findings: &mut [Finding], indices: Vec<usize>) -> io:
         return Ok(());
     }
 
-    let mut text = std::fs::read_to_string(path)?;
+    let mut text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        // Deleted or rewritten as non-UTF-8 since the scan: same as an edited file.
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+            ) =>
+        {
+            for index in edits {
+                findings[index].fix = Fix::Manual(ManualReason::ChangedDuringRun);
+            }
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     // Last span first, so earlier offsets stay valid while replacing.
     edits.sort_by_key(|&index| std::cmp::Reverse(findings[index].link.span.start));
     let unchanged = edits.iter().all(|&index| {
@@ -476,6 +491,8 @@ mod tests {
     fn unreadable_file_is_an_error_and_leaves_no_temp_file() {
         let text = format!("[a]({OLD_A})\n");
         let dir = tempfile::tempdir().unwrap();
+        // A directory in place of the file: a read error that is neither NotFound nor InvalidData.
+        std::fs::create_dir(dir.path().join("post.md")).unwrap();
         let mut findings = vec![finding(
             &text,
             OLD_A,
@@ -484,7 +501,43 @@ mod tests {
             Ctx::MdDest,
         )];
         assert!(apply(dir.path(), &mut findings).is_err());
+        assert_eq!(leftovers(dir.path()), ["post.md"]);
+    }
+
+    #[test]
+    fn deleted_file_counts_as_changed() {
+        let text = format!("[a]({OLD_A})\n");
+        let dir = site(&text);
+        let mut findings = vec![finding(
+            &text,
+            OLD_A,
+            "https://a.test/new",
+            permanent(),
+            Ctx::MdDest,
+        )];
+        std::fs::remove_file(dir.path().join("post.md")).unwrap();
+        apply(dir.path(), &mut findings).unwrap();
+        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
         assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn non_utf8_file_counts_as_changed() {
+        let text = format!("[a]({OLD_A})\n");
+        let dir = site(&text);
+        let mut findings = vec![finding(
+            &text,
+            OLD_A,
+            "https://a.test/new",
+            permanent(),
+            Ctx::MdDest,
+        )];
+        let bytes = [0xff, 0xfe, 0x00];
+        std::fs::write(dir.path().join("post.md"), bytes).unwrap();
+        apply(dir.path(), &mut findings).unwrap();
+        assert_eq!(std::fs::read(dir.path().join("post.md")).unwrap(), bytes);
+        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
+        assert_eq!(leftovers(dir.path()), ["post.md"]);
     }
 
     #[cfg(unix)]
