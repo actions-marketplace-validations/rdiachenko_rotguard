@@ -3,7 +3,6 @@
 - [idea] Weekly GitHub Action that runs `rotguard --apply` on the site and opens a PR with the fixes — from shape link-health, 2026-10-19
 - [idea] Run-state file so a link counts as dead only after N consecutive failing runs and flaky hosts stop flapping in CI — from shape link-health, 2026-10-19
 - [P2] R23: add unwritable-fix rules for `Ctx::MdText` (`'`, trailing `.,;:!?)`) and `Ctx::Html` (record the attribute quote in `Ctx`) — Requirements R23, Extract — from shape link-health, 2026-10-19
-- [P2] `site_url`/`archive_url` accept non-http schemes and host-less URLs; require http(s) and a host — src/config.rs:94 — from whittle/link-health, 2026-10-19
 - [P2] A YAML value that is only an anchor or tag (`a: &x`, `a: !foo`) makes the lexer skip the nested block, so its URLs fall back to non-verbatim whole-block spans — src/extract.rs:421 — from whittle/link-health, 2026-10-19
 - [P2] Temporary resolver failures (EAI_AGAIN, "temporary failure in name resolution") map to `Dns`, which R7 makes DEAD; consider mapping them to `Connect` (unverifiable). The design accepts the local-DNS-outage case as-is, so this is a design change — src/check.rs:204 — from whittle/link-health, 2026-10-19
 - [P2] No unit test covers `FetchError::Dns`; it needs a resolver failure that doesn't use the network — src/check.rs — from whittle/link-health, 2026-10-19

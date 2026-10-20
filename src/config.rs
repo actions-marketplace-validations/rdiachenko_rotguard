@@ -35,6 +35,8 @@ pub enum ConfigError {
     DuplicateHost { host: String },
     /// `deadline_s` is above 86400 (one day).
     Deadline { value: u64 },
+    /// `site_url` or `archive_url` is not an http or https URL with a host.
+    Url { field: &'static str, value: String },
 }
 
 impl fmt::Display for ConfigError {
@@ -56,6 +58,10 @@ impl fmt::Display for ConfigError {
                 f,
                 "invalid {FILE_NAME}: `deadline_s` ({value}) must be at most {MAX_DEADLINE_S}"
             ),
+            Self::Url { field, value } => write!(
+                f,
+                "invalid {FILE_NAME}: `{field}` ({value}) must be an http or https URL with a host"
+            ),
             Self::DuplicateHost { host } => write!(
                 f,
                 "invalid {FILE_NAME}: `[hosts]` lists {host:?} more than once (keys ignore case)"
@@ -70,7 +76,10 @@ impl Error for ConfigError {
             Self::Read { source, .. } => Some(source),
             Self::Parse(source) => Some(source),
             Self::Ignore { source, .. } => Some(source),
-            Self::UserAgent { .. } | Self::DuplicateHost { .. } | Self::Deadline { .. } => None,
+            Self::UserAgent { .. }
+            | Self::DuplicateHost { .. }
+            | Self::Deadline { .. }
+            | Self::Url { .. } => None,
         }
     }
 }
@@ -198,6 +207,17 @@ impl TryFrom<Raw> for Config {
     type Error = ConfigError;
 
     fn try_from(raw: Raw) -> Result<Self, ConfigError> {
+        for (field, url) in [
+            ("site_url", &raw.site_url),
+            ("archive_url", &raw.archive_url),
+        ] {
+            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                return Err(ConfigError::Url {
+                    field,
+                    value: url.to_string(),
+                });
+            }
+        }
         if raw.deadline_s > MAX_DEADLINE_S {
             return Err(ConfigError::Deadline {
                 value: raw.deadline_s,
@@ -347,6 +367,26 @@ soft404 = false
                 "{value}: {err}"
             );
             assert!(err.to_string().contains("deadline_s"), "{value}: {err}");
+        }
+    }
+
+    #[test]
+    fn non_http_or_hostless_urls_are_rejected() {
+        for (field, text) in [
+            ("site_url", "site_url = \"file:///x\"\n"),
+            ("site_url", "site_url = \"data:text/plain,x\"\n"),
+            (
+                "archive_url",
+                "site_url = \"https://site.test\"\narchive_url = \"ftp://a.test\"\n",
+            ),
+        ] {
+            let err = parse(text).unwrap_err();
+
+            assert!(
+                matches!(&err, ConfigError::Url { field: f, .. } if *f == field),
+                "{text}: {err}"
+            );
+            assert!(err.to_string().contains(field), "{text}: {err}");
         }
     }
 
