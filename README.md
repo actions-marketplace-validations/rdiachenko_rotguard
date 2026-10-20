@@ -62,7 +62,7 @@ content/posts/a.md:12  PERMANENT REDIRECT 301 200  https://old.example.com/page
     fix: https://new.example.com/page
 content/posts/b.md:3  DEAD 404  https://gone.example.com/x
     fix: https://web.archive.org/web/20200101000000/https://gone.example.com/x
-content/posts/c.md:7  TEMPORARY REDIRECT 302  https://a.example.com/
+content/posts/c.md:7  TEMPORARY REDIRECT 302 200  https://a.example.com/
     final: https://a.example.com/login
 checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, ignored 0
 ```
