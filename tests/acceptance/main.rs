@@ -3,6 +3,7 @@
 
 mod apply;
 mod archive;
+mod blocked;
 mod check;
 mod config;
 mod extract;
