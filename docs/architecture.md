@@ -29,6 +29,8 @@ links, redirects and soft-404s. It reports each broken link with a proposed fix,
   `UNVERIFIABLE`. Only a 404, 410 or a missing host on two tries makes a link `DEAD`.
 - **Wayback Machine**: when it fails or has no capture, the finding says `manual fix: no
   archived copy` or `archive unreachable`, and nothing is written.
+- **GitHub Actions**: the site owner can also run the binary from `action.yml` on a schedule. The
+  site's workflow (`docs/github-actions.md`) opens a pull request with the fixes.
 
 ## Components
 
@@ -53,6 +55,10 @@ One crate, `src/`:
 - `report.rs`: renders findings and the summary line as text, JSON or HTML.
 - `progress.rs`: progress on stderr, one rewritten line on a terminal, plain lines when piped.
 - `lib.rs`: `run(Args) -> ExitCode` wires it together; `main.rs` only parses arguments.
+
+Outside `src/`, `action.yml` is a composite GitHub Action. It builds rotguard on the runner, runs
+`--apply` and outputs the exit code and the path of a markdown report. The site's workflow, shown
+in `docs/github-actions.md`, uses those outputs to open the pull request.
 
 ## Main flows
 
@@ -104,6 +110,8 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
 - `robots.txt` is not consulted (`docs/design/link-health.md`, D9).
 - A 401, 403 or 999 is a bot wall only when a same-folder probe gets the same status, and blocked
   links are listed only with `--strict` (`docs/design/bot-walls.md`, D1, D2).
+- The weekly run lives in CI, not in the binary: a composite action builds rotguard from its own
+  source with no secret, and only exit 0 or 1 opens a PR (`docs/design/weekly-fix-pr.md`, D1, D6).
 
 ## Limits
 

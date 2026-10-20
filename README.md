@@ -32,6 +32,9 @@ holds the counts of the summary line.
 
 Run it without `--apply` first, read the report, then run it again with `--apply`.
 
+To run it every week and get the fixes as a pull request, see
+[docs/github-actions.md](docs/github-actions.md).
+
 ## Configure
 
 Only `site_url` is required. Links to its host count as internal and are not checked.
