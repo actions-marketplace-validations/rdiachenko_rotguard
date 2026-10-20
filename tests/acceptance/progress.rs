@@ -158,7 +158,6 @@ async fn run_with_config(block: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn progress_s6_config_doc_example_loads_and_covers_every_key() {
     let doc = read_repo_file("docs/config.md");
     let block = toml_blocks(&doc)
