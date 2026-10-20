@@ -112,14 +112,20 @@ pub fn run(args: Args) -> ExitCode {
     let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg));
     // Hung requests must not hold the process past the deadline.
     runtime.shutdown_background();
-    if args.apply
-        && let Err(err) = apply::apply(&args.site_dir, &mut findings)
-    {
-        eprintln!("rotguard: applying fixes: {err}");
-        return ExitCode::from(2);
-    }
+    let apply_errors = if args.apply {
+        apply::apply(&args.site_dir, &mut findings)
+    } else {
+        Vec::new()
+    };
     println!("{}", report::render(&findings, &summary));
-    exit_code(&findings, args.strict)
+    for err in &apply_errors {
+        eprintln!("rotguard: applying fixes: {err}");
+    }
+    if apply_errors.is_empty() {
+        exit_code(&findings, args.strict)
+    } else {
+        ExitCode::from(2)
+    }
 }
 
 /// Reads and extracts every content file under `site_dir`, sorted by path.

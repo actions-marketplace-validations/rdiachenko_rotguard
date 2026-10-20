@@ -29,8 +29,6 @@
 - [P2] No test shows the probe signals ignore a non-2xx probe (every non-2xx probe in tests has an empty body); add a 404 probe with the page's title and expect Ok — src/check.rs:473 — from whittle/link-health, 2026-10-19
 - [P2] No test covers a root URL with a not-found title (the title check runs without a probe) — src/check.rs:462 — from whittle/link-health, 2026-10-19
 - [P2] Url-derived fixes can break Html and MdText positions R23 doesn't cover: `'` ends a single-quoted `href='…'`, and `\`, `&entity;`, `'` or `)` in MdText change or cut off the URL when it is extracted again — src/apply.rs — from whittle/link-health, 2026-10-19
-- [P2] An apply error on one file aborts the remaining files after earlier ones were rewritten, and no report is printed; carry on, gather errors, print the report, then exit 2 — src/apply.rs:34 — from whittle/link-health, 2026-10-19
-- [P2] Apply I/O errors don't name the file (`applying fixes: Permission denied`) — src/apply.rs:55 — from whittle/link-health, 2026-10-19
 - [P2] The apply unit test can't tell last-to-first from first-to-last (equal-length fixes); use a different-length fix plus CRLF and multibyte text before the spans — src/apply.rs:280 — from whittle/link-health, 2026-10-19
 - [P2] A body read error after a final status discards it (404 + truncated body → Unverifiable "connection", not DEAD); skip or ignore body errors for non-2xx — src/check.rs:181 — from whittle/link-health, 2026-10-19
 - [P2] Archive requests can overlap when a CDX response takes longer than archive_interval_ms; hold the gate across the request if R6's one-in-flight rule is meant to cover the archive — src/archive.rs:124 — from whittle/link-health, 2026-10-19
@@ -40,3 +38,4 @@
 - [P2] S15 compares the whole header, `SUSPECT redirect to root`; R19's header is `<CLASS> <status chain or reason>`, so a correct report that also prints the chain fails. Use starts_with + contains as S16, S18 and S19 do (needs a test amendment) — tests/acceptance/check.rs:264 — from the locked-test review, 2026-10-19
 - [P2] The acceptance runner waits for the binary with no timeout, so a hang (a broken deadline in S24 or S44) stalls the test run instead of failing it — tests/acceptance/support.rs:716 — from the locked-test review, 2026-10-19
 - [P2] No test pins the printed `ManualReason` strings ("not verbatim" is checked nowhere); add a table test of `to_string()` for every variant — src/lib.rs:63 — from whittle/backlog-2026-10-20, 2026-10-20
+- [P2] No test covers `run` after an apply error (report on stdout, then one `applying fixes:` line per error on stderr, then exit 2); add a CLI test with `--apply` and a planted `post.md.rotguard.tmp` — src/lib.rs:115 — from whittle/backlog-2026-10-20, 2026-10-20

@@ -12,17 +12,38 @@ use crate::check::Verdict;
 use crate::extract::{Ctx, Link, Quote};
 use crate::{Finding, Fix, ManualReason};
 
+/// A file that `apply` could not write.
+#[derive(Debug)]
+pub struct ApplyError {
+    /// The file, relative to the site directory.
+    pub file: PathBuf,
+    /// The I/O error from reading, writing or renaming it.
+    pub source: io::Error,
+}
+
+impl fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.file.display(), self.source)
+    }
+}
+
+impl Error for ApplyError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// Writes every proposed fix for permanent redirects and dead links into the site files.
 ///
 /// Fixes that cannot be written become `Fix::Manual`; a file whose spans no longer hold their
-/// original URL is left untouched and its fixes become `Manual(ChangedDuringRun)`. Fixes
-/// that were written become `Fix::Applied`. Each file is replaced atomically.
+/// original URL, or that was deleted or is no longer UTF-8, is left untouched and its fixes
+/// become `Manual(ChangedDuringRun)`. Fixes that were written become `Fix::Applied`. Each file
+/// is replaced atomically.
 ///
-/// # Errors
-///
-/// Returns the I/O error from reading, writing or renaming a file. The original file is
-/// left as it was.
-pub fn apply(site_dir: &Path, findings: &mut [Finding]) -> io::Result<()> {
+/// Every file is tried. Other I/O errors from reading, writing or renaming a file are returned
+/// per file; that file is left as it was and its findings keep `Fix::Proposed`.
+#[must_use]
+pub fn apply(site_dir: &Path, findings: &mut [Finding]) -> Vec<ApplyError> {
     let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
     for (index, finding) in findings.iter().enumerate() {
         let applicable = matches!(
@@ -33,10 +54,13 @@ pub fn apply(site_dir: &Path, findings: &mut [Finding]) -> io::Result<()> {
             by_file.entry(finding.file.clone()).or_default().push(index);
         }
     }
+    let mut errors = Vec::new();
     for (file, indices) in by_file {
-        apply_file(&site_dir.join(file), findings, indices)?;
+        if let Err(source) = apply_file(&site_dir.join(&file), findings, indices) {
+            errors.push(ApplyError { file, source });
+        }
     }
-    Ok(())
+    errors
 }
 
 fn apply_file(path: &Path, findings: &mut [Finding], indices: Vec<usize>) -> io::Result<()> {
@@ -116,7 +140,19 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     let tmp = path.with_file_name(name);
     // `create_new` fails on any existing path, a planted symlink included, so
     // a failed open means the path isn't ours and must stay.
-    let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "{} already exists and was not created by rotguard",
+                    tmp.file_name().unwrap_or_default().to_string_lossy()
+                ),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
     let result = file
         .write_all(text.as_bytes())
         .and_then(|()| file.set_permissions(std::fs::metadata(path)?.permissions()))
@@ -351,7 +387,7 @@ mod tests {
             finding(&text, OLD_A, "https://a.test/new", permanent(), Ctx::MdDest),
             finding(&text, OLD_B, "https://web.test/snap", dead(), Ctx::MdDest),
         ];
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         let expected = text
             .replacen(OLD_A, "https://a.test/new", 1)
             .replace(OLD_B, "https://web.test/snap");
@@ -387,7 +423,7 @@ mod tests {
             verdict: permanent(),
             fix: Fix::Proposed("https://a.test/new".to_string()),
         }];
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             "---\nnote: https://a.test/old\n  is worth a read\nsource: https://a.test/new\n---\n"
@@ -404,7 +440,7 @@ mod tests {
         ];
         let rewritten = text.replace(OLD_B, "https://b.test/other");
         std::fs::write(dir.path().join("post.md"), &rewritten).unwrap();
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             rewritten
@@ -427,7 +463,7 @@ mod tests {
             Ctx::MdDest,
         )];
         std::fs::write(dir.path().join("post.md"), "short").unwrap();
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             "short"
@@ -445,7 +481,7 @@ mod tests {
         ];
         // The set-aside finding must not make the file count as changed, even if its span moved.
         findings[0].link.span = 0..1;
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             text.replace(OLD_B, "https://web.test/snap")
@@ -476,7 +512,7 @@ mod tests {
             suspect,
             Ctx::MdDest,
         )];
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             text
@@ -500,8 +536,41 @@ mod tests {
             permanent(),
             Ctx::MdDest,
         )];
-        assert!(apply(dir.path(), &mut findings).is_err());
+        let errors = apply(dir.path(), &mut findings);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, Path::new("post.md"));
         assert_eq!(leftovers(dir.path()), ["post.md"]);
+    }
+
+    #[test]
+    fn one_unreadable_file_does_not_stop_the_others() {
+        let text = format!("[a]({OLD_A})\n");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("a.md")).unwrap();
+        std::fs::write(dir.path().join("b.md"), &text).unwrap();
+        let mut findings = vec![
+            finding(&text, OLD_A, "https://a.test/new", permanent(), Ctx::MdDest),
+            finding(&text, OLD_A, "https://a.test/new", permanent(), Ctx::MdDest),
+        ];
+        findings[0].file = PathBuf::from("a.md");
+        findings[1].file = PathBuf::from("b.md");
+        let errors = apply(dir.path(), &mut findings);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("b.md")).unwrap(),
+            text.replace(OLD_A, "https://a.test/new")
+        );
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, Path::new("a.md"));
+        assert!(errors[0].to_string().starts_with("a.md: "));
+        assert!(errors[0].source().is_some());
+        assert_eq!(
+            findings[0].fix,
+            Fix::Proposed("https://a.test/new".to_string())
+        );
+        assert_eq!(
+            findings[1].fix,
+            Fix::Applied("https://a.test/new".to_string())
+        );
     }
 
     #[test]
@@ -516,7 +585,7 @@ mod tests {
             Ctx::MdDest,
         )];
         std::fs::remove_file(dir.path().join("post.md")).unwrap();
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
         assert!(leftovers(dir.path()).is_empty());
     }
@@ -534,7 +603,7 @@ mod tests {
         )];
         let bytes = [0xff, 0xfe, 0x00];
         std::fs::write(dir.path().join("post.md"), bytes).unwrap();
-        apply(dir.path(), &mut findings).unwrap();
+        assert!(apply(dir.path(), &mut findings).is_empty());
         assert_eq!(std::fs::read(dir.path().join("post.md")).unwrap(), bytes);
         assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
         assert_eq!(leftovers(dir.path()), ["post.md"]);
@@ -556,7 +625,13 @@ mod tests {
             permanent(),
             Ctx::MdDest,
         )];
-        assert!(apply(dir.path(), &mut findings).is_err());
+        let errors = apply(dir.path(), &mut findings);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].to_string().contains("post.md.rotguard.tmp"),
+            "{}",
+            errors[0]
+        );
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
         assert_eq!(std::fs::read_link(&tmp).unwrap(), victim);
         assert_eq!(
