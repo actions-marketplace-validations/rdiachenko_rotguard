@@ -381,28 +381,29 @@ mod tests {
 
     #[test]
     fn replaces_two_spans_and_nothing_else() {
-        let text = format!("one [a]({OLD_A}) two\n[b]({OLD_B}) three {OLD_A}\n");
+        // The first fix is longer and the second shorter than their originals, with CRLF
+        // line ends and multibyte text before each span: editing first-to-last would shift
+        // the second span and corrupt it.
+        const NEW_A: &str = "https://a.test/a-much-longer-replacement";
+        const NEW_B: &str = "https://w.test/s";
+        let text = format!(
+            "caf\u{e9} \u{2014} [a]({OLD_A}) two\r\n\u{1f980} \u{2014} [b]({OLD_B}) three {OLD_A}\r\n"
+        );
         let dir = site(&text);
         let mut findings = vec![
-            finding(&text, OLD_A, "https://a.test/new", permanent(), Ctx::MdDest),
-            finding(&text, OLD_B, "https://web.test/snap", dead(), Ctx::MdDest),
+            finding(&text, OLD_A, NEW_A, permanent(), Ctx::MdDest),
+            finding(&text, OLD_B, NEW_B, dead(), Ctx::MdDest),
         ];
         assert!(apply(dir.path(), &mut findings).is_empty());
-        let expected = text
-            .replacen(OLD_A, "https://a.test/new", 1)
-            .replace(OLD_B, "https://web.test/snap");
+        let expected = format!(
+            "caf\u{e9} \u{2014} [a]({NEW_A}) two\r\n\u{1f980} \u{2014} [b]({NEW_B}) three {OLD_A}\r\n"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
             expected
         );
-        assert_eq!(
-            findings[0].fix,
-            Fix::Applied("https://a.test/new".to_string())
-        );
-        assert_eq!(
-            findings[1].fix,
-            Fix::Applied("https://web.test/snap".to_string())
-        );
+        assert_eq!(findings[0].fix, Fix::Applied(NEW_A.to_string()));
+        assert_eq!(findings[1].fix, Fix::Applied(NEW_B.to_string()));
         assert_eq!(leftovers(dir.path()), ["post.md"]);
     }
 

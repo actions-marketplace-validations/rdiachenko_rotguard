@@ -314,3 +314,32 @@ fn exit_code(findings: &[Finding], strict: bool) -> ExitCode {
     });
     ExitCode::from(u8::from(unfixed))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_reasons_print_their_report_strings() {
+        let table = [
+            (ManualReason::Archive(NoFix::NoCapture), "no archived copy"),
+            (
+                ManualReason::Archive(NoFix::Unreachable),
+                "archive unreachable",
+            ),
+            (ManualReason::Archive(NoFix::Deadline), "deadline"),
+            (
+                ManualReason::Unwritable(Unwritable::NotVerbatim),
+                "not verbatim",
+            ),
+            (
+                ManualReason::Unwritable(Unwritable::CannotQuote),
+                "cannot quote",
+            ),
+            (ManualReason::ChangedDuringRun, "changed during run"),
+        ];
+        for (reason, text) in table {
+            assert_eq!(reason.to_string(), text);
+        }
+    }
+}
