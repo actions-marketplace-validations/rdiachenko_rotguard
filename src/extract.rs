@@ -49,7 +49,6 @@ pub enum Ctx {
 pub enum Quote {
     Single,
     Double,
-    Bare,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,17 +115,18 @@ fn front_matter_links(
     };
     page.date = values.date;
 
+    if format == Format::Yaml {
+        yaml_links(page, lines, block.clone(), block_text, &values.urls);
+        return;
+    }
+
     let all_urls = values.urls;
     let mut remaining = all_urls.clone();
-    let tokens = match format {
-        Format::Toml => lex_toml(block_text),
-        Format::Yaml => lex_yaml(block_text),
-    };
+    let tokens = lex_toml(block_text);
     // The lexer can emit a phantom token whose text equals a real value elsewhere, and
     // pairing by text would let it take the verbatim span. A link is verbatim only when
     // the parser reads the token's span as exactly one of the values.
     let verify = Verify {
-        format,
         block_text,
         date_key: &cfg.date_key,
         urls: &all_urls,
@@ -154,7 +154,10 @@ fn front_matter_links(
         if remaining.is_empty() {
             break;
         }
-        let Some(decoded) = decode(format, &block_text[token.content.clone()], token.quote) else {
+        if token.quote != Quote::Double {
+            continue;
+        }
+        let Some(decoded) = decode_toml(&block_text[token.content.clone()]) else {
             continue;
         };
         if let Some(i) = remaining.iter().position(|url| *url == decoded) {
@@ -184,9 +187,40 @@ fn front_matter_links(
     }
 }
 
+/// Records the URL values of a YAML block. They are checked but never applied, so each span
+/// only has to point near the value: the first occurrence of its text after the previous
+/// one, or the whole block when the text does not occur there (an escaped value).
+fn yaml_links(
+    page: &mut Page,
+    lines: &Lines,
+    block: Range<usize>,
+    block_text: &str,
+    urls: &[String],
+) {
+    let mut cursor = 0;
+    for url in urls {
+        let span = match block_text[cursor..].find(url.as_str()) {
+            Some(i) => {
+                let start = block.start + cursor + i;
+                cursor += i + url.len();
+                start..start + url.len()
+            }
+            None => block.clone(),
+        };
+        page.links.push(link(
+            lines,
+            url,
+            span,
+            Ctx::FrontMatter {
+                quote: Quote::Double,
+            },
+            false,
+        ));
+    }
+}
+
 /// What the parser read from a front-matter block, to confirm a token's span is a value.
 struct Verify<'a> {
-    format: Format,
     block_text: &'a str,
     date_key: &'a str,
     urls: &'a [String],
@@ -205,7 +239,7 @@ impl Verify<'_> {
         probe.push_str(&self.block_text[..span.start]);
         probe.push_str(&sentinel);
         probe.push_str(&self.block_text[span.end..]);
-        let Some(values) = parse_values(self.format, &probe, self.date_key) else {
+        let Some(values) = parse_values(Format::Toml, &probe, self.date_key) else {
             return false;
         };
         let count = |urls: &[String], target: &str| urls.iter().filter(|u| *u == target).count();
@@ -640,17 +674,10 @@ fn parse_values(format: Format, block: &str, date_key: &str) -> Option<Values> {
     Some(Values { urls, date })
 }
 
-/// Decodes the content of a quoted token the way the front-matter parser would.
-fn decode(format: Format, content: &str, quote: Quote) -> Option<String> {
-    match (format, quote) {
-        (_, Quote::Bare) | (Format::Toml, Quote::Single) => None,
-        (Format::Toml, Quote::Double) => {
-            let table: toml::Table = toml::from_str(&format!("v = \"{content}\"")).ok()?;
-            table.get("v")?.as_str().map(str::to_owned)
-        }
-        (Format::Yaml, Quote::Double) => serde_norway::from_str(&format!("\"{content}\"")).ok(),
-        (Format::Yaml, Quote::Single) => serde_norway::from_str(&format!("'{content}'")).ok(),
-    }
+/// Decodes the content of a TOML basic string token the way the parser would.
+fn decode_toml(content: &str) -> Option<String> {
+    let table: toml::Table = toml::from_str(&format!("v = \"{content}\"")).ok()?;
+    table.get("v")?.as_str().map(str::to_owned)
 }
 
 /// Whether `s` is an absolute http(s) URL with a host, exactly as written: the lenient
@@ -705,21 +732,15 @@ fn yaml_date(value: &serde_norway::Value) -> Option<NaiveDate> {
 }
 
 /// Finds the end of a quoted string starting after the opening quote at `from`.
-/// Returns the index of the closing quote. `doubled` makes `''` an escaped quote.
-fn closing_quote(s: &str, from: usize, quote: u8, backslash: bool, doubled: bool) -> Option<usize> {
+/// Returns the index of the closing quote.
+fn closing_quote(s: &str, from: usize, quote: u8, backslash: bool) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut i = from;
     while i < bytes.len() {
         match bytes[i] {
             b'\n' => return None,
             b'\\' if backslash => i += 1,
-            b if b == quote => {
-                if doubled && bytes.get(i + 1) == Some(&quote) {
-                    i += 1;
-                } else {
-                    return Some(i);
-                }
-            }
+            b if b == quote => return Some(i),
             _ => {}
         }
         i += 1;
@@ -766,7 +787,7 @@ fn lex_toml(block: &str) -> Vec<Token> {
                     i = end;
                     continue;
                 }
-                let Some(end) = closing_quote(block, i + 1, q, q == b'"', false) else {
+                let Some(end) = closing_quote(block, i + 1, q, q == b'"') else {
                     i += 1;
                     continue;
                 };
@@ -787,170 +808,6 @@ fn lex_toml(block: &str) -> Vec<Token> {
         i += 1;
     }
     tokens
-}
-
-fn lex_yaml(block: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    let mut base = 0;
-    // While set, lines indented deeper than this belong to the previous scalar
-    // (block scalar body or plain/quoted continuation) and hold no tokens.
-    let mut inside: Option<usize> = None;
-    // Index of the plain token the previous line pushed, which a continuation line
-    // turns into part of a longer, non-URL scalar.
-    let mut plain: Option<usize> = None;
-    // Indent of a key whose value has not started: a plain scalar on the next line is
-    // that key's value, so its continuation lines are measured against the key.
-    let mut valueless: Option<usize> = None;
-    for line in block.split_inclusive('\n') {
-        let text = line.trim_end_matches(['\n', '\r']);
-        // A tab counts as a space here, as it does everywhere a line's leading
-        // whitespace is read.
-        let body = text.trim_start_matches([' ', '\t']);
-        let indent = text.len() - body.len();
-        if let Some(parent) = inside
-            && (text.trim().is_empty() || indent > parent)
-        {
-            // A `#` line is a comment and leaves the value alone; any other
-            // non-blank line continues the scalar, so the plain token is not a URL value.
-            if !text.trim().is_empty()
-                && !body.starts_with('#')
-                && let Some(i) = plain.take()
-            {
-                tokens.remove(i);
-            }
-            base += line.len();
-            continue;
-        }
-        if valueless.is_some() && (text.trim().is_empty() || body.starts_with('#')) {
-            base += line.len();
-            continue;
-        }
-        let before = tokens.len();
-        let key_indent = valueless.take();
-        inside = match lex_yaml_line(text, base, &mut tokens) {
-            Line::Done => None,
-            Line::Open(n) => Some(n),
-            Line::KeyOnly(n) => {
-                valueless = Some(n);
-                None
-            }
-            Line::Scalar(n) => Some(key_indent.filter(|&k| indent > k).unwrap_or(n)),
-        };
-        plain = (tokens.len() > before && tokens[before].quote == Quote::Bare).then_some(before);
-        base += line.len();
-    }
-    tokens
-}
-
-/// What a lexed YAML line leaves open for the lines below it.
-enum Line {
-    /// Nothing: the line's value, if any, ended on it.
-    Done,
-    /// A scalar that following lines continue while indented deeper than this.
-    Open(usize),
-    /// A key with no value, or only node properties, at this indent.
-    KeyOnly(usize),
-    /// Like `Open`, for a plain scalar that is the whole line (no key, no `- `).
-    Scalar(usize),
-}
-
-/// Whether `s` is a block scalar header: `|` or `>` with optional chomping/indent marks.
-fn is_block_indicator(s: &str) -> bool {
-    s.strip_prefix(['|', '>'])
-        .is_some_and(|rest| rest.chars().all(|c| matches!(c, '+' | '-' | '0'..='9')))
-}
-
-/// Lexes one line. Reports the indent that following lines must exceed to still belong
-/// to a scalar that began on this line.
-fn lex_yaml_line(line: &str, base: usize, tokens: &mut Vec<Token>) -> Line {
-    let bytes = line.as_bytes();
-    let skip_spaces = |mut p: usize| {
-        while p < bytes.len() && bytes[p] == b' ' {
-            p += 1;
-        }
-        p
-    };
-    let indent = skip_spaces(0);
-    let mut pos = indent;
-    // Sequence indicators.
-    while line[pos..].starts_with("- ") || &line[pos..] == "-" {
-        pos = skip_spaces(pos + 1);
-    }
-    let first = pos;
-    let mut had_key = false;
-    loop {
-        pos = skip_spaces(pos);
-        // Node properties (anchors and tags) are not part of the value; a value that is
-        // only properties introduces the nested block below it.
-        while matches!(bytes.get(pos), Some(b'&' | b'!')) {
-            // YAML separates a property from what follows by a space or a tab.
-            let end = line[pos..]
-                .find([' ', '\t'])
-                .map_or(bytes.len(), |n| pos + n);
-            pos = end;
-            while matches!(bytes.get(pos), Some(b' ' | b'\t')) {
-                pos += 1;
-            }
-        }
-        if pos >= bytes.len() || bytes[pos] == b'#' {
-            return if had_key {
-                Line::KeyOnly(first)
-            } else {
-                Line::Done
-            };
-        }
-        let parent = if had_key { first } else { indent };
-        let c = bytes[pos];
-        if c == b'\'' || c == b'"' {
-            let Some(end) = closing_quote(line, pos + 1, c, c == b'"', c == b'\'') else {
-                // A quoted string running over the line end continues below.
-                return Line::Open(parent);
-            };
-            let after = skip_spaces(end + 1);
-            let is_key =
-                bytes.get(after) == Some(&b':') && bytes.get(after + 1).is_none_or(|&b| b == b' ');
-            if is_key {
-                had_key = true;
-                pos = after + 1;
-                continue;
-            }
-            tokens.push(Token {
-                content: base + pos + 1..base + end,
-                quote: if c == b'"' {
-                    Quote::Double
-                } else {
-                    Quote::Single
-                },
-            });
-            return Line::Done;
-        }
-        // A comment starts at `#` preceded by a space or a tab.
-        let stop = line[pos..]
-            .match_indices('#')
-            .find(|&(n, _)| n > 0 && matches!(bytes[pos + n - 1], b' ' | b'\t'))
-            .map_or(bytes.len(), |(n, _)| pos + n);
-        let segment = &line[pos..stop];
-        let key_end = segment
-            .find(": ")
-            .or_else(|| segment.ends_with(':').then(|| segment.len() - 1));
-        if let Some(k) = key_end {
-            had_key = true;
-            pos += k + 1;
-            continue;
-        }
-        let trimmed = segment.trim_end();
-        if !is_block_indicator(trimmed) {
-            tokens.push(Token {
-                content: base + pos..base + pos + trimmed.len(),
-                quote: Quote::Bare,
-            });
-        }
-        return if had_key || first != indent {
-            Line::Open(parent)
-        } else {
-            Line::Scalar(parent)
-        };
-    }
 }
 
 #[cfg(test)]
@@ -974,88 +831,6 @@ mod tests {
         }
     }
 
-    /// Asserts the URL is reported once, checked, and never verbatim inside `field`.
-    fn assert_phantom_not_applied(text: &str, field_start: &str, field_end: &str) {
-        let page = run(text);
-        let urls: Vec<_> = page
-            .links
-            .iter()
-            .filter(|l| l.url == "https://a.test/p")
-            .collect();
-        let start = text.find(field_start).expect("fixture has the field");
-        let end = start
-            + text[start..]
-                .find(field_end)
-                .expect("fixture ends the field");
-        assert!(
-            !page
-                .links
-                .iter()
-                .any(|l| l.verbatim && l.span.start >= start && l.span.end <= end),
-            "{text:?}: {:?}",
-            page.links
-        );
-        assert!(!urls.is_empty(), "{text:?}");
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn phantom_token_after_property_only_entry_is_not_applied() {
-        for prop in ["&f", "!t", ""] {
-            let text = format!(
-                "---\nl:\n  - {prop}\n    https://a.test/p\n    more\n  - https://a.test/p\n---\n"
-            );
-            assert_phantom_not_applied(&text, "l:", "\n  - https://a.test/p\n---");
-            assert_eq!(run(&text).links.len(), 1, "{text:?}");
-        }
-    }
-
-    #[test]
-    fn phantom_token_in_multiline_quoted_scalar_is_not_applied() {
-        for q in ['"', '\''] {
-            let text =
-                format!("---\na:\n  {q}x\n  https://a.test/p\n  y{q}\nb: https://a.test/p\n---\n");
-            assert_phantom_not_applied(&text, "a:", "\nb:");
-        }
-    }
-
-    #[test]
-    fn phantom_token_after_property_only_line_is_not_applied() {
-        let text = "---\na:\n  &x\n  https://a.test/p\n  more\nb: https://a.test/p\n---\n";
-        assert_phantom_not_applied(text, "a:", "\nb:");
-    }
-
-    #[test]
-    fn phantom_token_with_real_copy_in_flow_list_is_not_applied() {
-        let text = "---\na:\n  &x\n  https://a.test/p\n  more\ntags: [https://a.test/p]\n---\n";
-        assert_phantom_not_applied(text, "a:", "\ntags:");
-    }
-
-    #[test]
-    fn phantom_token_with_real_copy_in_flow_map_is_not_applied() {
-        let text = "---\na:\n  &x\n  https://a.test/p\n  more\nb: {u: https://a.test/p}\n---\n";
-        assert_phantom_not_applied(text, "a:", "\nb:");
-    }
-
-    #[test]
-    fn phantom_token_in_sequence_entry_with_real_flow_copy_is_not_applied() {
-        let text = "---\nl:\n  - &f\n    https://a.test/p\n    more\nm: [https://a.test/p]\n---\n";
-        assert_phantom_not_applied(text, "l:", "\nm:");
-    }
-
-    #[test]
-    fn phantom_token_in_quoted_scalar_with_real_flow_copy_is_not_applied() {
-        let text = "---\na:\n  \"x\n  https://a.test/p\n  y\"\nb: [https://a.test/p]\n---\n";
-        assert_phantom_not_applied(text, "a:", "\nb:");
-    }
-
-    #[test]
-    fn phantom_token_with_real_copy_through_alias_is_not_applied() {
-        let text =
-            "---\na:\n  &x\n  https://a.test/p\n  more\nb: &y https://a.test/p\nc: *y\n---\n";
-        assert_phantom_not_applied(text, "a:", "\nb:");
-    }
-
     #[test]
     fn toml_equal_urls_in_separate_keys_stay_verbatim() {
         let text = "+++\na = \"https://a.test/p\"\nb = \"https://a.test/p\"\n+++\n";
@@ -1063,50 +838,6 @@ mod tests {
         assert_eq!(page.links.len(), 2);
         assert!(page.links.iter().all(|l| l.verbatim));
         assert_slices(text, &page);
-    }
-
-    #[test]
-    fn yaml_one_line_list_alone_is_checked_within_the_block() {
-        let text = "---\ntags: [https://a.test/p]\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        let link = &page.links[0];
-        assert_eq!(link.url, "https://a.test/p");
-        assert_slices(text, &page);
-        let open = text.find('[').expect("fixture has a list");
-        let close = text.find(']').expect("fixture closes the list");
-        assert!(
-            !link.verbatim || (link.span.start > open && link.span.end <= close),
-            "{link:?}"
-        );
-    }
-
-    #[test]
-    fn equal_urls_in_separate_fields_stay_verbatim() {
-        let text = "---\na: https://a.test/p\nb: https://a.test/p\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 2);
-        assert!(page.links.iter().all(|l| l.verbatim));
-        assert_eq!(page.links[0].line, 2);
-        assert_eq!(page.links[1].line, 3);
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn yaml_front_matter_after_bom() {
-        let text = "\u{feff}---\ndate: 2020-01-02\nsource: 'https://a.test/x'\n---\n";
-        let page = run(text);
-        assert_eq!(page.date, NaiveDate::from_ymd_opt(2020, 1, 2));
-        assert_eq!(page.links.len(), 1);
-        let link = &page.links[0];
-        assert_eq!(
-            link.ctx,
-            Ctx::FrontMatter {
-                quote: Quote::Single
-            }
-        );
-        assert_eq!(&text[link.span.clone()], "https://a.test/x");
-        assert_eq!(link.line, 3);
     }
 
     #[test]
@@ -1235,64 +966,6 @@ mod tests {
     }
 
     #[test]
-    fn yaml_block_scalar_body_is_not_a_value() {
-        let text = "---\ndesc: |-\n  https://a.test/x\nlink: https://a.test/x\n---\n";
-        let page = run(text);
-        // The block scalar is a real value too, but it is never applied.
-        let verbatim: Vec<_> = page.links.iter().filter(|l| l.verbatim).collect();
-        assert_eq!(verbatim.len(), 1);
-        assert_eq!(verbatim[0].line, 4);
-        assert_eq!(page.links.len(), 2);
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn yaml_plain_continuation_line_is_not_a_value() {
-        let text = "---\ndesc: intro\n  https://a.test/x\nlink: https://a.test/x\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert_eq!(page.links[0].line, 4);
-        assert!(page.links[0].verbatim);
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn yaml_continued_plain_value_does_not_claim_a_later_link() {
-        let text =
-            "---\nnote: https://a.test/x\n  is worth a read\nsource: https://a.test/x\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1, "{:?}", page.links);
-        let l = &page.links[0];
-        assert_eq!(l.url, "https://a.test/x");
-        assert_eq!(l.line, 4);
-        assert!(l.verbatim);
-        assert_eq!(&text[l.span.clone()], "https://a.test/x");
-        assert!(text[..l.span.start].ends_with("source: "));
-    }
-
-    #[test]
-    fn yaml_comment_line_after_a_plain_value_keeps_its_token() {
-        for comment in ["  # note", "  \t# note"] {
-            let text = format!("---\nsource: https://a.test/x\n{comment}\n---\n");
-            let page = run(&text);
-            assert_eq!(page.links.len(), 1, "{comment:?}: {:?}", page.links);
-            let l = &page.links[0];
-            assert!(l.verbatim, "{comment:?}");
-            assert_eq!(&text[l.span.clone()], "https://a.test/x");
-            assert_eq!(l.line, 2);
-        }
-    }
-
-    #[test]
-    fn yaml_comment_after_tab_is_cut() {
-        let text = "---\nu: https://a.test/x\t# c\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert!(page.links[0].verbatim);
-        assert_slices(text, &page);
-    }
-
-    #[test]
     fn repaired_urls_are_not_kept() {
         for value in [
             " https://a.test/x ",
@@ -1342,137 +1015,79 @@ mod tests {
     }
 
     #[test]
-    fn yaml_nested_values_and_date() {
-        let text = "---\ntitle: T\ndate: 2024-03-05\ndiscussedOn:\n  - url: https://a.test/x\n  - \"https://b.test/y\"\n  - 'https://c.test/z' # note https://a.test/x\nnested:\n  deep:\n    link: https://d.test/w  # c\n---\nbody\n";
-        let page = run(text);
-        assert_eq!(page.date, NaiveDate::from_ymd_opt(2024, 3, 5));
-        let got: Vec<_> = page
-            .links
-            .iter()
-            .map(|l| (l.url.as_str(), l.line, l.ctx))
-            .collect();
-        let fm = |quote| Ctx::FrontMatter { quote };
-        assert_eq!(
-            got,
-            [
-                ("https://a.test/x", 5, fm(Quote::Bare)),
-                ("https://b.test/y", 6, fm(Quote::Double)),
-                ("https://c.test/z", 7, fm(Quote::Single)),
-                ("https://d.test/w", 10, fm(Quote::Bare)),
-            ]
+    fn yaml_values_are_reported_never_applied() {
+        // (name, text, expected (url, line, span is the url's text), expected date)
+        type Row = (
+            &'static str,
+            &'static str,
+            &'static [(&'static str, u32, bool)],
+            Option<NaiveDate>,
         );
-        assert!(page.links.iter().all(|l| l.verbatim));
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn yaml_plain_scalar_under_a_valueless_key_continues_against_the_key() {
-        for head in ["a: &x", "a:", "a: !t"] {
-            let text =
-                format!("---\n{head}\n  https://a.test/p\n  more\nb: https://a.test/p\n---\n");
-            let page = run(&text);
-            assert_eq!(page.links.len(), 1, "{head}");
-            let l = &page.links[0];
-            assert_eq!((l.line, l.verbatim), (5, true), "{head}");
-            assert_eq!(&text[l.span.clone()], "https://a.test/p", "{head}");
-            assert_eq!(text[..l.span.start].matches('\n').count(), 4, "{head}");
-        }
-    }
-
-    #[test]
-    fn yaml_nested_structures_under_a_valueless_key_keep_their_links() {
-        for body in [
-            "a:\n  https://a.test/p\nb: x\n",
-            "a:\n  - https://a.test/p\n  - more\n",
-            "a:\n  url: https://a.test/p\n",
-        ] {
-            let text = format!("---\n{body}---\n");
-            let page = run(&text);
-            assert_eq!(page.links.len(), 1, "{body:?}");
-            let l = &page.links[0];
-            assert_eq!((l.line, l.verbatim), (3, true), "{body:?}");
-            assert_eq!(&text[l.span.clone()], "https://a.test/p", "{body:?}");
-        }
-    }
-
-    #[test]
-    fn yaml_property_only_value_introduces_the_nested_block() {
-        for text in [
-            "---\nlinks: &l\n  - https://a.test/x\n---\n",
-            "---\nmeta: !thing\n  url: https://a.test/x\n---\n",
-            "---\nmeta: &m !thing # c\n  url: https://a.test/x\n---\n",
-            "---\nlinks:\n  - &l\n    url: https://a.test/x\n---\n",
-        ] {
+        let rows: &[Row] = &[
+            (
+                "nested mapping, list and date",
+                "---\ndate: 2024-03-05\nnested:\n  deep:\n    link: https://a.test/x  # c\nl:\n  - \"https://b.test/y\"\n  - 'https://c.test/z'\n---\n",
+                &[
+                    ("https://a.test/x", 5, true),
+                    ("https://b.test/y", 7, true),
+                    ("https://c.test/z", 8, true),
+                ],
+                NaiveDate::from_ymd_opt(2024, 3, 5),
+            ),
+            (
+                "flow list",
+                "---\ntags: [https://a.test/p]\n---\n",
+                &[("https://a.test/p", 2, true)],
+                None,
+            ),
+            (
+                "repeated url on two lines",
+                "---\na: https://a.test/p\nb: https://a.test/p\n---\n",
+                &[("https://a.test/p", 2, true), ("https://a.test/p", 3, true)],
+                None,
+            ),
+            (
+                "escaped value gets the whole block",
+                "---\ntitle: T\nu: \"https://e.test/a\\x62\"\nv: https://a.test/z\n---\n",
+                &[
+                    ("https://e.test/ab", 2, false),
+                    ("https://a.test/z", 4, true),
+                ],
+                None,
+            ),
+            (
+                "tagged values",
+                "---\nmeta: !thing\n  url: https://a.test/x\nv: !<tag:a.test,2024:u> https://a.test/y\n---\n",
+                &[("https://a.test/x", 3, true), ("https://a.test/y", 4, true)],
+                None,
+            ),
+            (
+                "byte-order mark and date string",
+                "\u{feff}---\ndate: \"2022-01-02 10:00\"\nsource: 'https://a.test/x'\n---\n",
+                &[("https://a.test/x", 3, true)],
+                NaiveDate::from_ymd_opt(2022, 1, 2),
+            ),
+        ];
+        for (name, text, expected, date) in rows {
             let page = run(text);
-            assert_eq!(page.links.len(), 1, "{text:?}");
-            assert_eq!(page.links[0].url, "https://a.test/x");
-            assert!(page.links[0].verbatim, "{text:?}");
-            assert_eq!(&text[page.links[0].span.clone()], "https://a.test/x");
+            assert_eq!(page.date, *date, "{name}");
+            let got: Vec<_> = page
+                .links
+                .iter()
+                .map(|l| (l.url.as_str(), l.line, text[l.span.clone()] == l.url))
+                .collect();
+            assert_eq!(got, *expected, "{name}");
+            for l in &page.links {
+                assert!(!l.verbatim, "{name}");
+                assert_eq!(
+                    l.ctx,
+                    Ctx::FrontMatter {
+                        quote: Quote::Double
+                    },
+                    "{name}"
+                );
+            }
         }
-    }
-
-    #[test]
-    fn yaml_properties_before_a_value_are_not_part_of_it() {
-        let fm = |quote| Ctx::FrontMatter { quote };
-        let text = "---\na: &x https://a.test/z\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert_eq!(page.links[0].ctx, fm(Quote::Bare));
-        assert!(page.links[0].verbatim);
-        assert_eq!(&text[page.links[0].span.clone()], "https://a.test/z");
-
-        let text = "---\na: !!str 'https://a.test/q'\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert_eq!(page.links[0].ctx, fm(Quote::Single));
-        assert!(page.links[0].verbatim);
-        assert_eq!(&text[page.links[0].span.clone()], "https://a.test/q");
-    }
-
-    #[test]
-    fn yaml_tab_after_a_property_still_ends_it() {
-        let text = "---\na: !foo\t|\n  https://a.test/b\nb: https://a.test/b\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert!(page.links[0].verbatim);
-        let span = page.links[0].span.clone();
-        assert_eq!(&text[span.clone()], "https://a.test/b");
-        assert_eq!(
-            text[..span.start].matches('\n').count(),
-            3,
-            "link is on line 4"
-        );
-    }
-
-    #[test]
-    fn yaml_block_scalar_after_a_property_has_no_links() {
-        let page = run("---\na: !foo |\n  https://a.test/b\n---\n");
-        assert!(page.links.is_empty());
-    }
-
-    #[test]
-    fn yaml_verbatim_tag_is_a_property() {
-        let text = "---\na: !<tag:yaml.org,2002:str> https://a.test/v\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert_eq!(page.links[0].ctx, Ctx::FrontMatter { quote: Quote::Bare });
-        assert!(page.links[0].verbatim);
-        assert_eq!(&text[page.links[0].span.clone()], "https://a.test/v");
-    }
-
-    #[test]
-    fn yaml_date_string() {
-        let page = run("---\ndate: \"2022-01-02 10:00\"\n---\n");
-        assert_eq!(page.date, NaiveDate::from_ymd_opt(2022, 1, 2));
-    }
-
-    #[test]
-    fn yaml_escaped_value_is_not_verbatim() {
-        let text = "---\nu: \"https://e.test/a\\x62\"\n---\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert_eq!(page.links[0].url, "https://e.test/ab");
-        assert!(!page.links[0].verbatim);
     }
 
     #[test]

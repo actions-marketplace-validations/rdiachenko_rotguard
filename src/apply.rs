@@ -206,7 +206,6 @@ pub fn writable(fix: &str, link: &Link) -> Result<(), Unwritable> {
             quote: Quote::Double,
         } => !fix.contains(['"', '\\']),
         Ctx::MdDest => md_dest_ok(fix),
-        Ctx::FrontMatter { quote: Quote::Bare } => true,
     };
     if quotable {
         Ok(())
@@ -278,7 +277,6 @@ mod tests {
         let double = Ctx::FrontMatter {
             quote: Quote::Double,
         };
-        let bare = Ctx::FrontMatter { quote: Quote::Bare };
         let ok = Ok(());
         let quote = Err(Unwritable::CannotQuote);
         let rows: &[(&str, Ctx, bool, Result<(), Unwritable>)] = &[
@@ -303,12 +301,10 @@ mod tests {
             ),
             ("https://a.test/n", single, true, ok),
             ("https://a.test/n", double, true, ok),
-            ("https://a.test/n", bare, true, ok),
             ("https://a.test/it's", single, true, quote),
             ("https://a.test/it's", double, true, ok),
             ("https://a.test/a\"b", double, true, quote),
             ("https://a.test/a\"b", single, true, ok),
-            ("https://a.test/it's", bare, true, ok),
             ("https://a.test/a b", Ctx::MdDest, true, quote),
             ("https://a.test/a\tb", Ctx::MdDest, true, quote),
             ("https://a.test/M/a)b", Ctx::MdDest, true, quote),
@@ -427,30 +423,6 @@ mod tests {
         assert_eq!(findings[0].fix, Fix::Applied(NEW_A.to_string()));
         assert_eq!(findings[1].fix, Fix::Applied(NEW_B.to_string()));
         assert_eq!(leftovers(dir.path()), ["post.md"]);
-    }
-
-    #[test]
-    fn yaml_front_matter_changes_only_the_real_value() {
-        let text =
-            "---\nnote: https://a.test/old\n  is worth a read\nsource: https://a.test/old\n---\n";
-        let dir = site(text);
-        let page = crate::extract::extract(
-            Path::new("post.md"),
-            text,
-            &crate::config::parse("site_url = \"https://site.test\"").unwrap(),
-        );
-        assert_eq!(page.links.len(), 1);
-        let mut findings = vec![Finding {
-            file: PathBuf::from("post.md"),
-            link: page.links[0].clone(),
-            verdict: permanent(),
-            fix: Fix::Proposed("https://a.test/new".to_string()),
-        }];
-        assert!(apply(dir.path(), &mut findings).is_empty());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
-            "---\nnote: https://a.test/old\n  is worth a read\nsource: https://a.test/new\n---\n"
-        );
     }
 
     #[test]

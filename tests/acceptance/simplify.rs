@@ -26,7 +26,6 @@ async fn dead_world() -> World {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn simplify_s1_yaml_front_matter_is_left_alone() {
     let w = moved_world().await;
     let (old, old2, new) = (w.url("/old"), w.url("/old2"), w.url("/new"));
