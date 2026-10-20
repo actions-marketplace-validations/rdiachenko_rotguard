@@ -6,6 +6,7 @@ mod archive;
 mod check;
 mod config;
 mod extract;
+mod format;
 mod progress;
 mod report;
 mod simplify;
