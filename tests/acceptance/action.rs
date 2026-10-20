@@ -268,7 +268,6 @@ fn first_yaml_block(md: &str) -> String {
 }
 
 #[test]
-#[ignore = "pending: S5"]
 fn action_s5_documented_workflow_has_the_agreed_shape() {
     let doc = read_repo_file("docs/github-actions.md");
     let workflow = parse_yaml(&first_yaml_block(&doc), "the first yaml block");
