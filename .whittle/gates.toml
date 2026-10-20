@@ -21,6 +21,7 @@ risk_paths = [
   ".env*",
   ".whittle/gates.toml",
   "src/apply.rs",
+  "action.yml",
 ]
 max_diff_lines = 3000
 merge = "local"

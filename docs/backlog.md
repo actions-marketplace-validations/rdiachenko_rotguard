@@ -1,6 +1,5 @@
 # Backlog
 
-- [idea] Weekly GitHub Action that runs `rotguard --apply` on the site and opens a PR with the fixes — from shape link-health, 2026-10-19
 - [idea] Run-state file so a link counts as dead only after N consecutive failing runs and flaky hosts stop flapping in CI — from shape link-health, 2026-10-19
 - [idea] Decide whether a temporary resolver failure (EAI_AGAIN, "temporary failure in name resolution") is DEAD, as R7 makes every DNS failure today, or unverifiable like a connection error — src/check.rs:300 — from whittle/link-health, re-tagged 2026-10-20
 - [idea] Decide whether R10 means any hop through `/` or only the final URL: today `/archives/123` → `/?p=123` → `/2020/post/` is SUSPECT and loses its permanent fix — src/check.rs:284 — from whittle/link-health, re-tagged 2026-10-20
