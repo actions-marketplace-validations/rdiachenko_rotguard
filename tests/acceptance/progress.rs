@@ -44,7 +44,6 @@ async fn progress_s1_piped_run_prints_start_and_end_lines_on_stderr() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn progress_s2_archive_phase_prints_its_own_lines() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/gone", status(404))).await;

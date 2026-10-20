@@ -269,7 +269,15 @@ async fn check_pages(
         })
         .map(|o| (o.url.clone(), o.date.unwrap_or(run_date)))
         .collect();
-    let snapshots = look_up_snapshots(lookups, cfg, deadline).await;
+    let n = lookups.len();
+    let snapshots = if n > 0 {
+        progress.start(Phase::Archive, n);
+        let snapshots = look_up_snapshots(lookups, cfg, deadline, |done| progress.tick(done)).await;
+        progress.finish();
+        snapshots
+    } else {
+        look_up_snapshots(lookups, cfg, deadline, |_| {}).await
+    };
 
     let mut findings = Vec::new();
     for occ in &occurrences {
@@ -337,6 +345,7 @@ async fn look_up_snapshots(
     lookups: HashSet<(Url, NaiveDate)>,
     cfg: &Config,
     deadline: Instant,
+    mut on_done: impl FnMut(usize),
 ) -> HashMap<(Url, NaiveDate), Result<Url, NoFix>> {
     let archive = Arc::new(Archive::new(cfg));
     let mut tasks = JoinSet::new();
@@ -348,7 +357,10 @@ async fn look_up_snapshots(
         });
     }
     let mut snapshots = HashMap::new();
+    let mut count = 0;
     while let Some(joined) = tasks.join_next().await {
+        count += 1;
+        on_done(count);
         // A panicked lookup leaves its key absent, which the caller reports as a deadline.
         if let Ok((key, result)) = joined {
             snapshots.insert(key, result);
