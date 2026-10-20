@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use chrono::NaiveDate;
 use reqwest::Client;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use tokio::time::{Instant, sleep_until, timeout_at};
 use url::Url;
 
@@ -142,7 +142,8 @@ impl Archive {
             Side::After => ("from", "1"),
         };
         for _ in 0..ATTEMPTS {
-            self.wait_for_gate().await;
+            // Held until the body is read (or the attempt fails), so one request is in flight.
+            let _gate = self.wait_for_gate().await;
             let mut request = self.endpoint.clone();
             request.query_pairs_mut().extend_pairs([
                 ("url", url.as_str()),
@@ -171,12 +172,15 @@ impl Archive {
     }
 
     /// Waits until `interval` has passed since the last request started, then claims the slot.
-    async fn wait_for_gate(&self) {
+    ///
+    /// The slot stays claimed while the returned guard lives.
+    async fn wait_for_gate(&self) -> MutexGuard<'_, Option<Instant>> {
         let mut last = self.last_start.lock().await;
         if let Some(previous) = *last {
             sleep_until(previous + self.interval).await;
         }
         *last = Some(Instant::now());
+        last
     }
 }
 
@@ -520,6 +524,45 @@ mod tests {
             assert!(
                 pair[1] - pair[0] >= Duration::from_millis(150),
                 "starts only {:?} apart",
+                pair[1] - pair[0]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_reply_keeps_the_next_request_waiting() {
+        let server = MockServer::start().await;
+        let starts = Starts::default();
+        let recorded = Arc::clone(&starts);
+        Mock::given(any())
+            .respond_with(move |_: &Request| {
+                recorded
+                    .lock()
+                    .expect("starts lock")
+                    .push(std::time::Instant::now());
+                ResponseTemplate::new(200)
+                    .set_body_string("[]")
+                    .set_delay(Duration::from_millis(300))
+            })
+            .mount(&server)
+            .await;
+        let archive = archive(&server, "archive_interval_ms = 50\n");
+        let url = target();
+        let date = day(2021, 6, 1);
+        let (a, b) = tokio::join!(
+            archive.snapshot(&url, date, soon()),
+            archive.snapshot(&url, date, soon()),
+        );
+        assert_eq!(a, Err(NoFix::NoCapture));
+        assert_eq!(b, Err(NoFix::NoCapture));
+        let mut times = starts.lock().expect("lock").clone();
+        times.sort();
+        assert_eq!(times.len(), 4);
+        for pair in times.windows(2) {
+            // The server stamps a request on arrival, so allow a little slack under the delay.
+            assert!(
+                pair[1] - pair[0] >= Duration::from_millis(280),
+                "requests overlapped: starts only {:?} apart",
                 pair[1] - pair[0]
             );
         }
