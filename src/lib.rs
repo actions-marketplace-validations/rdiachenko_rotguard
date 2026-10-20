@@ -150,9 +150,15 @@ fn read_pages(site_dir: &Path, cfg: &Config) -> Result<Vec<(PathBuf, Page)>, Str
         .build()
         .map_err(|err| format!("content globs: {err}"))?;
 
+    let prefixes: Vec<PathBuf> = cfg.content.iter().map(|p| literal_prefix(p)).collect();
     let mut files = Vec::new();
     for entry in WalkDir::new(site_dir) {
-        let entry = entry.map_err(|err| format!("walking {}: {err}", site_dir.display()))?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            // A directory no content glob can match below is not ours to read.
+            Err(err) if outside_content(site_dir, err.path(), &prefixes) => continue,
+            Err(err) => return Err(format!("walking {}: {err}", site_dir.display())),
+        };
         let Ok(relative) = entry.path().strip_prefix(site_dir) else {
             continue;
         };
@@ -172,6 +178,24 @@ fn read_pages(site_dir: &Path, cfg: &Config) -> Result<Vec<(PathBuf, Page)>, Str
             Ok((relative, page))
         })
         .collect()
+}
+
+/// The leading path components of `pattern` that contain no glob metacharacter or escape.
+fn literal_prefix(pattern: &str) -> PathBuf {
+    pattern
+        .split('/')
+        .take_while(|part| !part.contains(['*', '?', '[', '{', '\\']))
+        .collect()
+}
+
+/// Whether `path` is neither inside nor above any content glob's literal prefix.
+fn outside_content(site_dir: &Path, path: Option<&Path>, prefixes: &[PathBuf]) -> bool {
+    let Some(relative) = path.and_then(|p| p.strip_prefix(site_dir).ok()) else {
+        return false;
+    };
+    prefixes
+        .iter()
+        .all(|prefix| !relative.starts_with(prefix) && !prefix.starts_with(relative))
 }
 
 /// A link that survived the external and `ignore` filters.
@@ -359,6 +383,60 @@ mod tests {
         .expect("valid config");
         let pages = read_pages(site.path(), &cfg).expect("pages read");
         pages.into_iter().map(|(path, _)| path).collect()
+    }
+
+    /// Restores a directory's mode on drop so the temp dir can be removed.
+    #[cfg(unix)]
+    struct RestoreMode(PathBuf);
+
+    #[cfg(unix)]
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt as _;
+            // Best effort: a failure only leaves the temp dir behind.
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_directory_outside_content_is_skipped() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let site = tempfile::tempdir().expect("temp site");
+        put(site.path(), "content/a.md", "a\n");
+        let public = site.path().join("public");
+        std::fs::create_dir(&public).expect("create public");
+        let _restore = RestoreMode(public.clone());
+        std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod public");
+        if std::fs::read_dir(&public).is_ok() {
+            return; // running as root: permissions do not apply
+        }
+        let cfg = config::parse("site_url = \"https://site.test\"\n").expect("valid config");
+
+        let pages = read_pages(site.path(), &cfg).expect("pages read");
+
+        let paths: Vec<_> = pages.into_iter().map(|(path, _)| path).collect();
+        assert_eq!(paths, [PathBuf::from("content/a.md")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_directory_inside_content_is_an_error() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let site = tempfile::tempdir().expect("temp site");
+        put(site.path(), "content/sub/b.md", "b\n");
+        let sub = site.path().join("content/sub");
+        let _restore = RestoreMode(sub.clone());
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).expect("chmod sub");
+        if std::fs::read_dir(&sub).is_ok() {
+            return; // running as root: permissions do not apply
+        }
+        let cfg = config::parse("site_url = \"https://site.test\"\n").expect("valid config");
+
+        let err = read_pages(site.path(), &cfg).expect_err("walk error kept");
+
+        assert!(err.starts_with("walking "), "{err}");
     }
 
     #[test]
