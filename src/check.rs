@@ -179,7 +179,12 @@ impl Fetcher {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.trim().parse::<u64>().ok())
             .map(Duration::from_secs);
-        let body = read_capped(response).await?;
+        let body = match read_capped(response).await {
+            Ok(body) => body,
+            // The status is the answer; only 2xx bodies feed soft-404 checks.
+            Err(_) if !status.is_success() => Vec::new(),
+            Err(err) => return Err(err),
+        };
         Ok((hop, Outcome::Final { body, retry_after }))
     }
 
@@ -650,6 +655,49 @@ mod tests {
 
     fn redirect(status: u16, to: &str) -> ResponseTemplate {
         ResponseTemplate::new(status).insert_header("Location", to)
+    }
+
+    /// Serves one response whose `Content-Length` promises more than is sent, then hangs up.
+    async fn truncated_url(status_line: &str) -> Url {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback binds");
+        let addr = listener.local_addr().expect("bound socket has an address");
+        let head = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort"
+        );
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("the test connects once");
+            let mut request = [0u8; 1024];
+            // The request content is irrelevant; read it so closing doesn't reset the socket.
+            let _ = socket.read(&mut request).await;
+            let _ = socket.write_all(head.as_bytes()).await;
+            // Dropping the socket cuts the body short.
+        });
+        Url::parse(&format!("http://{addr}/page")).expect("loopback url is valid")
+    }
+
+    #[tokio::test]
+    async fn a_truncated_body_keeps_the_non_2xx_status() {
+        let target = truncated_url("404 Not Found").await;
+        let outcome = fetcher("host_interval_ms = 0").fetch(&target).await;
+        let fetched = outcome
+            .as_ref()
+            .expect("the status survives the body error");
+        assert_eq!(fetched.chain.last().map(|h| h.status), Some(404));
+        assert!(fetched.body.is_empty());
+        assert_eq!(classify(&outcome, &HostConfig::default()), dead("404"));
+    }
+
+    #[tokio::test]
+    async fn a_truncated_2xx_body_is_still_an_error() {
+        let target = truncated_url("200 OK").await;
+        let err = fetcher("host_interval_ms = 0")
+            .fetch(&target)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, FetchError::Connect), "{err:?}");
     }
 
     #[tokio::test]
