@@ -172,117 +172,108 @@ mod tests {
     }
 
     #[test]
-    fn permanent_prints_chain_and_fix() {
-        let f = finding(
-            "a.md",
-            3,
-            permanent(),
-            Fix::Proposed("https://new.test/x#frag".into()),
-        );
-        let out = render(&[f], &Summary::default());
-        assert!(
-            out.starts_with(
-                "a.md:3  PERMANENT REDIRECT 301 200  https://old.test/x#frag\n    fix: https://new.test/x#frag\n"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn applied_prints_fix() {
-        let f = finding(
-            "a.md",
-            3,
-            permanent(),
-            Fix::Applied("https://new.test/x".into()),
-        );
-        assert!(render(&[f], &Summary::default()).contains("\n    fix: https://new.test/x\n"));
-    }
-
-    #[test]
-    fn dead_prints_reason_and_manual_fix() {
-        let f = finding(
-            "a.md",
-            1,
-            dead(),
-            Fix::Manual(ManualReason::Archive(NoFix::NoCapture)),
-        );
-        let out = render(&[f], &Summary::default());
-        assert!(
-            out.starts_with(
-                "a.md:1  DEAD 404  https://old.test/x#frag\n    manual fix: no archived copy\n"
-            ),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn temporary_prints_final_without_fix() {
-        let verdict = Verdict::Temporary {
-            chain: vec![hop("https://old.test/x", 302), hop("https://t.test/y", 200)],
-            final_url: Url::parse("https://t.test/y").unwrap(),
-        };
-        let out = render(
-            &[finding("a.md", 1, verdict, Fix::None)],
-            &Summary::default(),
-        );
-        assert!(
-            out.starts_with(
-                "a.md:1  TEMPORARY REDIRECT 302 200  https://old.test/x#frag\n    final: https://t.test/y\n"
-            ),
-            "{out}"
-        );
-        assert!(!out.contains("fix:"));
-    }
-
-    #[test]
-    fn unverifiable_has_no_detail_line() {
-        let verdict = Verdict::Unverifiable {
-            reason: "deadline".into(),
-        };
-        let out = render(
-            &[finding("a.md", 1, verdict, Fix::None)],
-            &Summary::default(),
-        );
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 2, "{out}");
-        assert_eq!(
-            lines[0],
-            "a.md:1  UNVERIFIABLE deadline  https://old.test/x#frag"
-        );
-    }
-
-    #[test]
-    fn suspect_prints_reason_and_fix_or_manual() {
-        let verdict = || Verdict::Suspect {
-            chain: vec![
-                hop("https://old.test/x", 301),
-                hop("https://old.test/", 200),
-            ],
+    fn each_class_prints_its_detail_line() {
+        let chain = |a, b| vec![hop("https://old.test/x", a), hop("https://t.test/y", b)];
+        let manual = || Fix::Manual(ManualReason::Archive(NoFix::NoCapture));
+        let suspect = || Verdict::Suspect {
+            chain: chain(301, 200),
             reason: "redirect to root".into(),
         };
-        let with_fix = finding(
-            "a.md",
-            1,
-            verdict(),
-            Fix::Proposed("https://web.test/s".into()),
-        );
-        let out = render(&[with_fix], &Summary::default());
-        assert!(
-            out.starts_with(
-                "a.md:1  SUSPECT redirect to root  https://old.test/x#frag\n    fix: https://web.test/s\n"
+        let cases = [
+            (
+                "permanent",
+                finding(
+                    "a.md",
+                    3,
+                    permanent(),
+                    Fix::Proposed("https://new.test/x#frag".into()),
+                ),
+                &[
+                    "a.md:3  PERMANENT REDIRECT 301 200  https://old.test/x#frag",
+                    "    fix: https://new.test/x#frag",
+                ][..],
             ),
-            "{out}"
-        );
-        let manual = finding(
-            "a.md",
-            1,
-            verdict(),
-            Fix::Manual(ManualReason::Archive(NoFix::NoCapture)),
-        );
-        assert!(
-            render(&[manual], &Summary::default()).contains("\n    manual fix: no archived copy\n")
-        );
+            (
+                "applied",
+                finding(
+                    "a.md",
+                    3,
+                    permanent(),
+                    Fix::Applied("https://new.test/x".into()),
+                ),
+                &[
+                    "a.md:3  PERMANENT REDIRECT 301 200  https://old.test/x#frag",
+                    "    fix: https://new.test/x",
+                ],
+            ),
+            (
+                "dead",
+                finding("a.md", 1, dead(), manual()),
+                &[
+                    "a.md:1  DEAD 404  https://old.test/x#frag",
+                    "    manual fix: no archived copy",
+                ],
+            ),
+            (
+                "temporary",
+                finding(
+                    "a.md",
+                    1,
+                    Verdict::Temporary {
+                        chain: chain(302, 200),
+                        final_url: Url::parse("https://t.test/y").unwrap(),
+                    },
+                    Fix::None,
+                ),
+                &[
+                    "a.md:1  TEMPORARY REDIRECT 302 200  https://old.test/x#frag",
+                    "    final: https://t.test/y",
+                ],
+            ),
+            (
+                "unverifiable",
+                finding(
+                    "a.md",
+                    1,
+                    Verdict::Unverifiable {
+                        reason: "deadline".into(),
+                    },
+                    Fix::None,
+                ),
+                &["a.md:1  UNVERIFIABLE deadline  https://old.test/x#frag"],
+            ),
+            (
+                "suspect with fix",
+                finding(
+                    "a.md",
+                    1,
+                    suspect(),
+                    Fix::Proposed("https://web.test/s".into()),
+                ),
+                &[
+                    "a.md:1  SUSPECT redirect to root  https://old.test/x#frag",
+                    "    fix: https://web.test/s",
+                ],
+            ),
+            (
+                "suspect manual",
+                finding("a.md", 1, suspect(), manual()),
+                &[
+                    "a.md:1  SUSPECT redirect to root  https://old.test/x#frag",
+                    "    manual fix: no archived copy",
+                ],
+            ),
+        ];
+        for (name, f, expected) in cases {
+            let out = render(&[f], &Summary::default());
+            let lines: Vec<&str> = out.lines().collect();
+            // The expected entry lines, then straight to the summary: no extra detail line.
+            assert_eq!(lines[..expected.len()], *expected, "{name}");
+            assert!(
+                lines[expected.len()].starts_with("checked "),
+                "{name}: {out}"
+            );
+        }
     }
 
     #[test]

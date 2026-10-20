@@ -447,23 +447,37 @@ mod tests {
     }
 
     #[test]
-    fn span_past_end_of_file_counts_as_changed() {
-        let text = format!("[a]({OLD_A})\n");
-        let dir = site(&text);
-        let mut findings = vec![finding(
-            &text,
-            OLD_A,
-            "https://a.test/new",
-            permanent(),
-            Ctx::MdDest,
-        )];
-        std::fs::write(dir.path().join("post.md"), "short").unwrap();
-        assert!(apply(dir.path(), &mut findings).is_empty());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
-            "short"
-        );
-        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
+    fn a_replaced_file_counts_as_changed() {
+        // (name, what replaces post.md (None: removed), directory listing afterwards)
+        let cases = [
+            ("span past end", Some(&b"short"[..]), &["post.md"][..]),
+            ("deleted", None, &[]),
+            ("non-utf8", Some(&[0xff, 0xfe, 0x00][..]), &["post.md"][..]),
+        ];
+        for (name, replacement, expected_leftovers) in cases {
+            let text = format!("[a]({OLD_A})\n");
+            let dir = site(&text);
+            let mut findings = vec![finding(
+                &text,
+                OLD_A,
+                "https://a.test/new",
+                permanent(),
+                Ctx::MdDest,
+            )];
+            let path = dir.path().join("post.md");
+            match replacement {
+                Some(bytes) => std::fs::write(&path, bytes).unwrap(),
+                None => std::fs::remove_file(&path).unwrap(),
+            }
+            assert!(apply(dir.path(), &mut findings).is_empty(), "{name}");
+            assert_eq!(std::fs::read(&path).ok().as_deref(), replacement, "{name}");
+            assert_eq!(
+                findings[0].fix,
+                Fix::Manual(ManualReason::ChangedDuringRun),
+                "{name}"
+            );
+            assert_eq!(leftovers(dir.path()), expected_leftovers, "{name}");
+        }
     }
 
     #[test]
@@ -566,42 +580,6 @@ mod tests {
             findings[1].fix,
             Fix::Applied("https://a.test/new".to_string())
         );
-    }
-
-    #[test]
-    fn deleted_file_counts_as_changed() {
-        let text = format!("[a]({OLD_A})\n");
-        let dir = site(&text);
-        let mut findings = vec![finding(
-            &text,
-            OLD_A,
-            "https://a.test/new",
-            permanent(),
-            Ctx::MdDest,
-        )];
-        std::fs::remove_file(dir.path().join("post.md")).unwrap();
-        assert!(apply(dir.path(), &mut findings).is_empty());
-        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
-        assert!(leftovers(dir.path()).is_empty());
-    }
-
-    #[test]
-    fn non_utf8_file_counts_as_changed() {
-        let text = format!("[a]({OLD_A})\n");
-        let dir = site(&text);
-        let mut findings = vec![finding(
-            &text,
-            OLD_A,
-            "https://a.test/new",
-            permanent(),
-            Ctx::MdDest,
-        )];
-        let bytes = [0xff, 0xfe, 0x00];
-        std::fs::write(dir.path().join("post.md"), bytes).unwrap();
-        assert!(apply(dir.path(), &mut findings).is_empty());
-        assert_eq!(std::fs::read(dir.path().join("post.md")).unwrap(), bytes);
-        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::ChangedDuringRun));
-        assert_eq!(leftovers(dir.path()), ["post.md"]);
     }
 
     #[cfg(unix)]
