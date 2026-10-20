@@ -131,7 +131,6 @@ impl Step {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn action_s1_fix_is_written_and_reported() {
     let w = World::new().await;
     w.serve(
@@ -169,7 +168,6 @@ async fn action_s1_fix_is_written_and_reported() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn action_s2_hand_fix_exits_one_and_writes_nothing() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/gone", status(404))).await;
@@ -199,7 +197,6 @@ async fn action_s2_hand_fix_exits_one_and_writes_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn action_s3_failed_run_exits_zero_with_code_two() {
     let w = World::new().await;
     w.site.write("post.md", "no links\n");
@@ -218,7 +215,6 @@ async fn action_s3_failed_run_exits_zero_with_code_two() {
 }
 
 #[test]
-#[ignore = "pending: S4"]
 fn action_s4_action_yml_has_the_agreed_shape() {
     let action = action();
     let steps = steps(&action);

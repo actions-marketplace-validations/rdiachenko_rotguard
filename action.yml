@@ -1,0 +1,38 @@
+name: rotguard
+description: Check a markdown site's links and write the safe fixes with rotguard --apply.
+outputs:
+  exit-code:
+    description: rotguard's exit code. 0 or 1 mean the fixes are complete (1 means some links need a hand fix); any other code means a failed run.
+    value: ${{ steps.run.outputs.exit-code }}
+  report:
+    description: Path of a markdown file with the report, for a PR body.
+    value: ${{ steps.run.outputs.report }}
+runs:
+  using: composite
+  steps:
+    - name: Build rotguard
+      shell: bash
+      run: |
+        rustup toolchain install stable --profile minimal
+        cargo +stable build --release --locked --manifest-path "$GITHUB_ACTION_PATH/Cargo.toml"
+    - id: run
+      name: Run rotguard --apply
+      shell: bash
+      run: |
+        stdout_file=$(mktemp "$RUNNER_TEMP/rotguard-stdout.XXXXXX")
+        report_file="$RUNNER_TEMP/rotguard-report.md"
+        set +e
+        "$GITHUB_ACTION_PATH/target/release/rotguard" --apply > "$stdout_file"
+        code=$?
+        set -e
+        cat "$stdout_file"
+        {
+          echo 'Fixes written by `rotguard --apply`. Entries marked `manual fix:` need a hand edit.'
+          echo
+          echo '```text'
+          cat "$stdout_file"
+          echo '```'
+        } > "$report_file"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=$report_file" >> "$GITHUB_OUTPUT"
+        exit 0
