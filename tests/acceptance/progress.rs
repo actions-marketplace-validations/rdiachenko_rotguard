@@ -217,7 +217,6 @@ async fn progress_s6_config_doc_example_loads_and_covers_every_key() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S7"]
 async fn progress_s7_readme_configure_example_loads_and_links_to_the_config_doc() {
     let readme = read_repo_file("README.md");
     let section = readme

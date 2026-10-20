@@ -40,13 +40,12 @@ ignore = []                     # regexes; matching URLs are skipped
 deadline_s = 300                # links unfinished by then are reported unverifiable
 
 # Turn soft-404 detection off for a host that fools it.
-[hosts."goodreads.com"]
+[hosts."www.goodreads.com"]
 soft404 = false
 ```
 
-Other keys, for when the defaults don't suit: `user_agent`, `not_found_phrases`, `archive_url`,
-`host_interval_ms`, `archive_interval_ms`, `recheck_delay_ms` and `timeout_ms`. An unknown key is
-an error.
+Every key's type, default, valid values and effect is in [docs/config.md](docs/config.md). An unknown
+key is an error.
 
 ## Read the report
 
