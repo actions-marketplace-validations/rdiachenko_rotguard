@@ -6,5 +6,6 @@ mod check;
 mod config;
 mod extract;
 mod report;
+mod simplify;
 mod soft404;
 mod support;
