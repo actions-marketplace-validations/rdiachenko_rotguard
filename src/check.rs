@@ -550,10 +550,6 @@ fn random_token() -> String {
 
 static TITLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").expect("regex is a literal"));
-static HIDDEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)<!--.*?-->|<script\b.*?</script>|<style\b.*?</style>")
-        .expect("regex is a literal")
-});
 static TAG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<[^>]*>").expect("regex is a literal"));
 
@@ -576,9 +572,69 @@ fn title_of(html: &str) -> String {
     })
 }
 
+/// The openers of hidden blocks and the closer that ends each.
+const HIDDEN_BLOCKS: [(&str, &str); 3] = [
+    ("<!--", "-->"),
+    ("<script", "</script>"),
+    ("<style", "</style>"),
+];
+
+/// Replaces comments, scripts and styles with a space in one left-to-right scan. An opener
+/// with no closer hides the rest of the body.
+fn strip_hidden(html: &str) -> String {
+    // ASCII lowercasing keeps byte offsets, so `lower` indexes `html` too.
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut pos = 0;
+    // Each opener's next position, searched again only once the scan has passed it, so no
+    // stretch of the body is searched twice for the same opener.
+    let mut next: [Option<usize>; 3] = [None; 3];
+    let mut searched = [0usize; 3];
+    loop {
+        for (i, &(opener, _)) in HIDDEN_BLOCKS.iter().enumerate() {
+            if searched[i] <= pos {
+                (next[i], searched[i]) = find_opener(&lower, pos, opener);
+            }
+        }
+        let Some((i, start)) = next
+            .iter()
+            .enumerate()
+            .filter_map(|(i, at)| at.map(|at| (i, at)))
+            .min_by_key(|&(_, at)| at)
+        else {
+            break;
+        };
+        let (opener, closer) = HIDDEN_BLOCKS[i];
+        out.push_str(&html[pos..start]);
+        out.push(' ');
+        let body = start + opener.len();
+        let Some(len) = lower[body..].find(closer) else {
+            return out;
+        };
+        pos = body + len + closer.len();
+    }
+    out.push_str(&html[pos..]);
+    out
+}
+
+/// The first `opener` at or after `from` that counts (`<script` and `<style` must be followed
+/// by a non-word character, like a regex `\b`), and how far the search has covered.
+fn find_opener(lower: &str, from: usize, opener: &str) -> (Option<usize>, usize) {
+    let mut at = from;
+    while let Some(found) = lower[at..].find(opener) {
+        let start = at + found;
+        let after = lower[start + opener.len()..].chars().next();
+        if opener == "<!--" || after.is_none_or(|c| !(c.is_alphanumeric() || c == '_')) {
+            return (Some(start), start);
+        }
+        at = start + opener.len();
+    }
+    (None, lower.len() + 1)
+}
+
 /// The set of 3-word shingles of the page's visible, lowercased text.
 fn shingles(html: &str) -> HashSet<String> {
-    let visible = HIDDEN.replace_all(html, " ");
+    let visible = strip_hidden(html);
     let visible = TAG.replace_all(&visible, " ");
     let visible = decode_entities(&visible).to_lowercase();
     let words: Vec<&str> = visible
@@ -1423,6 +1479,38 @@ mod tests {
         let got = shingles(html);
         let expected: HashSet<String> = ["one two three"].map(String::from).into();
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn an_unclosed_block_hides_the_rest_of_the_body() {
+        let got = shingles("<p>one two three</p><!-- four five six");
+        let expected: HashSet<String> = ["one two three"].map(String::from).into();
+        assert_eq!(got, expected);
+        assert!(shingles("<SCRIPT>a b c d").is_empty());
+    }
+
+    #[test]
+    fn hostile_body_is_stripped_in_linear_time() {
+        let html = "<script></script><!--".repeat(256 * 1024 / 21);
+        let started = std::time::Instant::now();
+        let got = shingles(&html);
+        assert!(got.is_empty());
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn many_closed_blocks_are_stripped_in_linear_time() {
+        let html = "<!---->".repeat(256 * 1024 / 7);
+        let started = std::time::Instant::now();
+        assert!(shingles(&html).is_empty());
+        assert!(started.elapsed() < Duration::from_millis(500));
+        let words = shingles("a <script b>x</script> b <style>y</style> c <scripty> d <!--z--> e");
+        let expected: HashSet<String> = ["a b c", "b c d", "c d e"].map(String::from).into();
+        assert_eq!(words, expected);
     }
 
     #[test]
