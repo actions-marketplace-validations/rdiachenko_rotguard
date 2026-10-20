@@ -832,97 +832,88 @@ mod tests {
     }
 
     #[test]
-    fn toml_equal_urls_in_separate_keys_stay_verbatim() {
-        let text = "+++\na = \"https://a.test/p\"\nb = \"https://a.test/p\"\n+++\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 2);
-        assert!(page.links.iter().all(|l| l.verbatim));
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn second_bom_is_not_front_matter() {
-        let text = "\u{feff}\u{feff}---\na: 'https://a.test/x'\n---\n";
-        let page = run(text);
-        assert!(
-            page.links
-                .iter()
-                .all(|l| !matches!(l.ctx, Ctx::FrontMatter { .. }))
-        );
-    }
-
-    #[test]
-    fn bom_without_front_matter_keeps_body_links() {
-        let text = "\u{feff}see https://m.test/a\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        let link = &page.links[0];
-        assert_eq!(link.ctx, Ctx::MdText);
-        assert_eq!(&text[link.span.clone()], "https://m.test/a");
-        assert_eq!(link.line, 1);
-    }
-
-    #[test]
     fn many_boms_do_not_overflow_the_stack() {
         let text = format!("{}---\n---\n", "\u{feff}".repeat(50_000));
         let _ = run(&text);
     }
 
     #[test]
-    fn toml_front_matter_after_bom() {
-        let text = "\u{feff}+++\ndate = 2020-01-02\nsource = \"https://a.test/x\"\n+++\n";
-        let page = run(text);
-        assert_eq!(page.date, NaiveDate::from_ymd_opt(2020, 1, 2));
-        assert_eq!(page.links.len(), 1);
-        let link = &page.links[0];
-        assert_eq!(
-            link.ctx,
-            Ctx::FrontMatter {
-                quote: Quote::Double
-            }
+    fn toml_front_matter_links_dates_and_spans() {
+        use Quote::{Double as D, Single as S};
+        // (text, date, expected (url, line, quote, raw span when the link is not verbatim))
+        type Row = (
+            &'static str,
+            Option<NaiveDate>,
+            &'static [(&'static str, u32, Quote, Option<&'static str>)],
         );
-        assert_eq!(&text[link.span.clone()], "https://a.test/x");
-        assert_eq!(link.line, 3);
-    }
-
-    #[test]
-    fn toml_nested_array_of_tables_and_date() {
-        let text = "+++\ntitle = \"T\"\ndate = 2024-03-05T10:00:00Z\n\n[[discussedOn]]\nurl = \"https://a.test/x\"\n\n[[discussedOn]]\nurl = 'https://b.test/y'\n+++\nbody\n";
-        let page = run(text);
-        assert_eq!(page.date, NaiveDate::from_ymd_opt(2024, 3, 5));
-        let got: Vec<_> = page
-            .links
-            .iter()
-            .map(|l| (l.url.as_str(), l.line, l.ctx, l.verbatim))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                (
-                    "https://a.test/x",
-                    6,
-                    Ctx::FrontMatter {
-                        quote: Quote::Double
-                    },
-                    true
-                ),
-                (
-                    "https://b.test/y",
-                    9,
-                    Ctx::FrontMatter {
-                        quote: Quote::Single
-                    },
-                    true
-                ),
-            ]
-        );
-        assert_slices(text, &page);
-    }
-
-    #[test]
-    fn toml_date_string() {
-        let page = run("+++\ndate = \"2023-12-31T08:00:00+01:00\"\n+++\n");
-        assert_eq!(page.date, NaiveDate::from_ymd_opt(2023, 12, 31));
+        let rows: &[Row] = &[
+            (
+                "+++\na = \"https://a.test/p\"\nb = \"https://a.test/p\"\n+++\n",
+                None,
+                &[
+                    ("https://a.test/p", 2, D, None),
+                    ("https://a.test/p", 3, D, None),
+                ],
+            ),
+            (
+                "\u{feff}+++\ndate = 2020-01-02\nsource = \"https://a.test/x\"\n+++\n",
+                NaiveDate::from_ymd_opt(2020, 1, 2),
+                &[("https://a.test/x", 3, D, None)],
+            ),
+            (
+                "+++\ntitle = \"T\"\ndate = 2024-03-05T10:00:00Z\n\n[[discussedOn]]\nurl = \"https://a.test/x\"\n\n[[discussedOn]]\nurl = 'https://b.test/y'\n+++\nbody\n",
+                NaiveDate::from_ymd_opt(2024, 3, 5),
+                &[
+                    ("https://a.test/x", 6, D, None),
+                    ("https://b.test/y", 9, S, None),
+                ],
+            ),
+            (
+                "+++\ndate = \"2023-12-31T08:00:00+01:00\"\n+++\n",
+                NaiveDate::from_ymd_opt(2023, 12, 31),
+                &[],
+            ),
+            (
+                "+++\n[\"https://a.test/x\"]\nnote = \"https://a.test/x\"\n+++\n",
+                None,
+                &[("https://a.test/x", 3, D, None)],
+            ),
+            (
+                "+++\n[[\"https://a.test/x\"]]\nnote = \"https://a.test/x\"\n+++\n",
+                None,
+                &[("https://a.test/x", 3, D, None)],
+            ),
+            (
+                "+++\nl = [\n  [\"https://a.test/x\"],\n  'https://b.test/y',\n]\n+++\n",
+                None,
+                &[
+                    ("https://a.test/x", 3, D, None),
+                    ("https://b.test/y", 4, S, None),
+                ],
+            ),
+            (
+                "+++\ntitle = \"T\"\nu = \"https://e.test/a\\u0062\"\n+++\n",
+                None,
+                &[("https://e.test/ab", 3, D, Some("https://e.test/a\\u0062"))],
+            ),
+        ];
+        for (text, date, want) in rows {
+            let page = run(text);
+            assert_eq!(page.date, *date, "{text:?}");
+            let got: Vec<_> = page
+                .links
+                .iter()
+                .map(|l| {
+                    let Ctx::FrontMatter { quote } = l.ctx else {
+                        panic!("{text:?}: {:?}", l.ctx)
+                    };
+                    let raw = (!l.verbatim).then(|| &text[l.span.clone()]);
+                    (l.url.as_str(), l.line, quote, raw)
+                })
+                .collect();
+            assert_eq!(got, *want, "{text:?}");
+            assert_slices(text, &page);
+        }
     }
 
     #[test]
@@ -945,27 +936,6 @@ mod tests {
     }
 
     #[test]
-    fn toml_table_header_keys_are_not_values() {
-        for header in ["[\"https://a.test/x\"]", "[[\"https://a.test/x\"]]"] {
-            let text = format!("+++\n{header}\nnote = \"https://a.test/x\"\n+++\n");
-            let page = run(&text);
-            assert_eq!(page.links.len(), 1, "{header}");
-            assert_eq!(page.links[0].line, 3);
-            assert!(page.links[0].verbatim);
-            assert_slices(&text, &page);
-        }
-    }
-
-    #[test]
-    fn toml_multiline_array_values_are_lexed() {
-        let text = "+++\nl = [\n  [\"https://a.test/x\"],\n  'https://b.test/y',\n]\n+++\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 2);
-        assert!(page.links.iter().all(|l| l.verbatim));
-        assert_slices(text, &page);
-    }
-
-    #[test]
     fn repaired_urls_are_not_kept() {
         for value in [
             " https://a.test/x ",
@@ -979,39 +949,6 @@ mod tests {
         let text = "---\nu: |\n  https://a.test/x\n---\n";
         assert!(run(text).links.is_empty());
         assert_eq!(run("+++\nu = \"HTTPS://A.test/x\"\n+++\n").links.len(), 1);
-    }
-
-    #[test]
-    fn toml_escaped_value_is_not_verbatim() {
-        let text = "+++\nu = \"https://e.test/a\\u0062\"\n+++\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        assert_eq!(page.links[0].url, "https://e.test/ab");
-        assert!(!page.links[0].verbatim);
-    }
-
-    #[test]
-    fn escaped_value_keeps_its_token_position() {
-        let text = "+++\ntitle = \"T\"\nu = \"https://e.test/a\\u0062\"\n+++\n";
-        let page = run(text);
-        assert_eq!(page.links.len(), 1);
-        let l = &page.links[0];
-        assert_eq!((l.line, l.verbatim), (3, false));
-        assert_eq!(
-            l.ctx,
-            Ctx::FrontMatter {
-                quote: Quote::Double
-            }
-        );
-        assert_eq!(&text[l.span.clone()], "https://e.test/a\\u0062");
-    }
-
-    #[test]
-    fn toml_skips_non_http_values() {
-        let page = run(
-            "+++\na = \"mailto:someone\"\nb = \"/rel\"\nc = \"//h.test/x\"\nd = \"https://\"\n+++\n",
-        );
-        assert!(page.links.is_empty());
     }
 
     #[test]
@@ -1091,19 +1028,6 @@ mod tests {
     }
 
     #[test]
-    fn no_front_matter_or_unclosed_yields_nothing() {
-        assert!(run("# title\nplain\n").links.is_empty());
-        // Unclosed front matter is plain body text: only a bare URL, never a front matter value.
-        let links = run("+++\nu = \"https://a.test\"\n").links;
-        assert_eq!(links.len(), 1);
-        assert_eq!(
-            (links[0].url.as_str(), links[0].line, links[0].ctx),
-            ("https://a.test", 2, Ctx::MdText)
-        );
-        assert_eq!(run("+++\nu = \n+++\n").links, []);
-    }
-
-    #[test]
     fn crlf_front_matter() {
         let text = "---\r\ndate: 2024-01-02\r\nu: https://a.test/x\r\n---\r\n";
         let page = run(text);
@@ -1159,12 +1083,6 @@ mod tests {
                 text.find("https://a.test/l").unwrap()
             ]
         );
-    }
-
-    #[test]
-    fn code_yields_nothing() {
-        let text = "```\n[a](https://a.test/1)\n<a href=\"https://a.test/2\">\n```\n\n    [b](https://a.test/3)\n    <https://a.test/4>\n\n~~~html\n<a href=\"https://a.test/5\">\n~~~\n\n`[c](https://a.test/6)` and ``<https://a.test/7>``\n";
-        assert_eq!(body(text), []);
     }
 
     #[test]
@@ -1249,9 +1167,119 @@ mod tests {
     }
 
     #[test]
-    fn non_http_destinations_yield_nothing() {
-        let text = "[a](mailto:someone) [b](rel/path) [c](#frag) [d](//h.test/x) <a href=\"/rel\">\n\n[e]: mailto:someone\n[f]: ../up\n";
-        assert_eq!(body(text), []);
+    fn non_link_inputs_yield_nothing() {
+        for text in [
+            "# title\nplain\n",
+            "+++\nu = \n+++\n",
+            "+++\na = \"mailto:someone\"\nb = \"/rel\"\nc = \"//h.test/x\"\nd = \"https://\"\n+++\n",
+            "```\n[a](https://a.test/1)\n<a href=\"https://a.test/2\">\n```\n\n    [b](https://a.test/3)\n    <https://a.test/4>\n\n~~~html\n<a href=\"https://a.test/5\">\n~~~\n\n`[c](https://a.test/6)` and ``<https://a.test/7>``\n",
+            "[a](mailto:someone) [b](rel/path) [c](#frag) [d](//h.test/x) <a href=\"/rel\">\n\n[e]: mailto:someone\n[f]: ../up\n",
+        ] {
+            assert_eq!(body(text), [], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn bare_urls_are_trimmed_decoded_and_never_verbatim() {
+        // (text, expected (url, line, span text))
+        type Row = (&'static str, &'static [(&'static str, u32, &'static str)]);
+        let rows: &[Row] = &[
+            (
+                "see https://m.test/a_b_(c)&x=1 now\n\n(see https://m.test/x).\n\n{{< figure src=\"https://m.test/s\" alt=\"x\" >}}\n\n- tight https://m.test/t, ok\n",
+                &[
+                    (
+                        "https://m.test/a_b_(c)&x=1",
+                        1,
+                        "https://m.test/a_b_(c)&x=1",
+                    ),
+                    ("https://m.test/x", 3, "https://m.test/x"),
+                    ("https://m.test/s", 5, "https://m.test/s"),
+                    ("https://m.test/t", 7, "https://m.test/t"),
+                ],
+            ),
+            (
+                "# title\n\nsee https://a.test/x here\n",
+                &[("https://a.test/x", 3, "https://a.test/x")],
+            ),
+            (
+                "+++\nu = \"https://a.test\"\n",
+                &[("https://a.test", 2, "https://a.test")],
+            ),
+            (
+                "\u{feff}see https://m.test/a\n",
+                &[("https://m.test/a", 1, "https://m.test/a")],
+            ),
+            (
+                "- https://m.test/a\\_b\n",
+                &[("https://m.test/a_b", 1, "https://m.test/a\\_b")],
+            ),
+            (
+                "- see https://m.test/**b**/c\n",
+                &[("https://m.test/**b**/c", 1, "https://m.test/**b**/c")],
+            ),
+            (
+                "> - https://m.test/*q*\n",
+                &[("https://m.test/*q", 1, "https://m.test/*q")],
+            ),
+            (
+                "see https://m.test/a\\_ here\n\nhttps://m.test/b_\n\nhttps://m.test/c\\\\_\n",
+                &[
+                    ("https://m.test/a", 1, "https://m.test/a"),
+                    ("https://m.test/b", 3, "https://m.test/b"),
+                    ("https://m.test/c\\", 5, "https://m.test/c\\\\"),
+                ],
+            ),
+            (
+                "**see https://m.test/bold**\n",
+                &[("https://m.test/bold", 1, "https://m.test/bold")],
+            ),
+            (
+                "[see https://m.test/br]\n",
+                &[("https://m.test/br", 1, "https://m.test/br")],
+            ),
+            (
+                "_https://m.test/ital_\n",
+                &[("https://m.test/ital", 1, "https://m.test/ital")],
+            ),
+            (
+                "see https://m.test/a\\_b\n\nhttps://m.test/a?b=c&amp;d=1\n",
+                &[
+                    ("https://m.test/a_b", 1, "https://m.test/a\\_b"),
+                    (
+                        "https://m.test/a?b=c&d=1",
+                        3,
+                        "https://m.test/a?b=c&amp;d=1",
+                    ),
+                ],
+            ),
+        ];
+        for (text, want) in rows {
+            let page = run(text);
+            let got: Vec<_> = page
+                .links
+                .iter()
+                .map(|l| (l.url.as_str(), l.line, &text[l.span.clone()]))
+                .collect();
+            assert_eq!(got, *want, "{text:?}");
+            assert!(
+                page.links
+                    .iter()
+                    .all(|l| l.ctx == Ctx::MdText && !l.verbatim),
+                "{text:?}"
+            );
+        }
+        let hostile = format!("https://m.test/a{}\n", "\\_".repeat(5000));
+        assert_eq!(run(&hostile).links[0].url, "https://m.test/a");
+    }
+
+    #[test]
+    fn second_bom_is_not_front_matter() {
+        let page = run("\u{feff}\u{feff}---\na: 'https://a.test/x'\n---\n");
+        assert!(
+            page.links
+                .iter()
+                .all(|l| !matches!(l.ctx, Ctx::FrontMatter { .. }))
+        );
     }
 
     #[test]
@@ -1259,115 +1287,6 @@ mod tests {
         let text = "---\nu: https://a.test/x\nmd: \"[a](https://b.test/y)\"\n---\nbody\n";
         let urls: Vec<_> = run(text).links.into_iter().map(|l| l.url).collect();
         assert_eq!(urls, ["https://a.test/x"]);
-    }
-
-    #[test]
-    fn bare_urls_are_trimmed_and_balanced() {
-        let text = "see https://m.test/a_b_(c)&x=1 now\n\n(see https://m.test/x).\n\n{{< figure src=\"https://m.test/s\" alt=\"x\" >}}\n\n- tight https://m.test/t, ok\n";
-        let page = run(text);
-        assert_slices(text, &page);
-        let got: Vec<_> = page
-            .links
-            .iter()
-            .map(|l| (l.url.as_str(), l.line, l.ctx, l.verbatim))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                ("https://m.test/a_b_(c)&x=1", 1, Ctx::MdText, false),
-                ("https://m.test/x", 3, Ctx::MdText, false),
-                ("https://m.test/s", 5, Ctx::MdText, false),
-                ("https://m.test/t", 7, Ctx::MdText, false),
-            ]
-        );
-    }
-
-    #[test]
-    fn bare_url_in_file_without_front_matter() {
-        let page = run("# title\n\nsee https://a.test/x here\n");
-        let got: Vec<_> = page
-            .links
-            .iter()
-            .map(|l| (l.url.as_str(), l.line))
-            .collect();
-        assert_eq!(got, [("https://a.test/x", 3)]);
-    }
-
-    #[test]
-    fn tight_list_urls_survive_inline_markup() {
-        let cases = [
-            ("- https://m.test/a\\_b\n", "https://m.test/a_b", false),
-            (
-                "- see https://m.test/**b**/c\n",
-                "https://m.test/**b**/c",
-                false,
-            ),
-            ("> - https://m.test/*q*\n", "https://m.test/*q", false),
-        ];
-        for (text, url, verbatim) in cases {
-            let page = run(text);
-            assert_slices(text, &page);
-            let got: Vec<_> = page
-                .links
-                .iter()
-                .map(|l| (l.url.as_str(), l.verbatim))
-                .collect();
-            assert_eq!(got, [(url, verbatim)], "{text:?}");
-        }
-    }
-
-    #[test]
-    fn bare_url_trimming_keeps_escapes_whole() {
-        let text = "see https://m.test/a\\_ here\n\nhttps://m.test/b_\n\nhttps://m.test/c\\\\_\n";
-        let page = run(text);
-        let spans: Vec<(&str, &str)> = page
-            .links
-            .iter()
-            .map(|l| (l.url.as_str(), &text[l.span.clone()]))
-            .collect();
-        assert_eq!(
-            spans,
-            [
-                ("https://m.test/a", "https://m.test/a"),
-                ("https://m.test/b", "https://m.test/b"),
-                ("https://m.test/c\\", "https://m.test/c\\\\"),
-            ]
-        );
-        let hostile = format!("https://m.test/a{}\n", "\\_".repeat(5000));
-        let page = run(&hostile);
-        assert_eq!(page.links[0].url, "https://m.test/a");
-    }
-
-    #[test]
-    fn bare_urls_drop_markdown_delimiters() {
-        let cases = [
-            ("**see https://m.test/bold**\n", "https://m.test/bold"),
-            ("[see https://m.test/br]\n", "https://m.test/br"),
-            ("_https://m.test/ital_\n", "https://m.test/ital"),
-        ];
-        for (text, url) in cases {
-            let got: Vec<_> = run(text).links.into_iter().map(|l| l.url).collect();
-            assert_eq!(got, [url], "{text:?}");
-        }
-    }
-
-    #[test]
-    fn bare_urls_decode_escapes_and_entities() {
-        let text = "see https://m.test/a\\_b\n\nhttps://m.test/a?b=c&amp;d=1\n";
-        let page = run(text);
-        let got: Vec<_> = page
-            .links
-            .iter()
-            .map(|l| (l.url.as_str(), l.verbatim))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                ("https://m.test/a_b", false),
-                ("https://m.test/a?b=c&d=1", false)
-            ]
-        );
-        assert_eq!(&text[page.links[0].span.clone()], "https://m.test/a\\_b");
     }
 
     #[test]
