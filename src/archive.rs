@@ -60,6 +60,20 @@ pub struct Archive {
     last_start: Mutex<Option<Instant>>,
 }
 
+/// Whether URL parsing would change what `original` points at: a `\`, a tab or newline, a
+/// trailing space or control character (stripped), or a dot segment (`.`, `..`, `%2e` in any
+/// case) in the path before any `?`.
+fn parsing_changes_target(original: &str) -> bool {
+    if original.contains(['\\', '\t', '\n', '\r']) || original.ends_with(|c: char| c <= ' ') {
+        return true;
+    }
+    let path = original.split('?').next().unwrap_or_default();
+    path.split('/').any(|segment| {
+        let segment = segment.to_ascii_lowercase().replace("%2e", ".");
+        segment == "." || segment == ".."
+    })
+}
+
 impl Archive {
     /// Builds the client once from the config's User-Agent and timeout.
     ///
@@ -107,11 +121,18 @@ impl Archive {
                 .ok_or(NoFix::NoCapture)?,
         };
         // A capture the archive reports but we cannot turn into a URL is an unusable answer.
-        Url::parse(&format!(
+        let snapshot = Url::parse(&format!(
             "{}/web/{}/{}",
             self.base, capture.timestamp, capture.original
         ))
-        .map_err(|_| NoFix::Unreachable)
+        .map_err(|_| NoFix::Unreachable)?;
+        // Parsing resolves dot segments, turns `\` into `/`, drops tabs and newlines and splits
+        // off a `#`; each would point the fix somewhere else. Mere percent-encoding is fine.
+        if snapshot.fragment().is_some() || parsing_changes_target(&capture.original) {
+            Err(NoFix::Unreachable)
+        } else {
+            Ok(snapshot)
+        }
     }
 
     /// One CDX query with up to 3 attempts.
@@ -333,7 +354,11 @@ mod tests {
             } else {
                 let cells: Vec<String> = rows
                     .iter()
-                    .map(|(ts, orig)| format!("[\"{ts}\",\"{orig}\"]"))
+                    .map(|(ts, orig)| {
+                        // Rows are written as JSON, so a backslash must be escaped.
+                        let orig = orig.replace('\\', "\\\\");
+                        format!("[\"{ts}\",\"{orig}\"]")
+                    })
                     .collect();
                 format!("[[\"timestamp\",\"original\"],{}]", cells.join(","))
             };
@@ -394,6 +419,45 @@ mod tests {
                 .ends_with("/web/20200101000000/http://old.example/a")
         );
         assert_eq!(got.fragment(), None);
+    }
+
+    #[tokio::test]
+    async fn an_original_that_url_rewrites_is_unreachable() {
+        for original in [
+            "https://a.test/a/../b",
+            "https://a.test/a/%2e%2e/b",
+            "https://a.test/a#x",
+            "https://a.test/../../../x",
+            "https://a.test/a\\b",
+            "https://a.test/a/.",
+            "https://a.test/a/%2E%2e/b",
+            "https://a.test/a/.%2E/b",
+            "https://a.test/a ",
+        ] {
+            let (server, _) = serve(vec![("20200101000000", original)]).await;
+            let got = archive(&server, "")
+                .snapshot(&target(), day(2021, 6, 1), soon())
+                .await;
+            assert_eq!(got, Err(NoFix::Unreachable), "{original}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_original_that_only_needs_encoding_keeps_its_snapshot() {
+        for original in [
+            "https://a.test:80/a",
+            "HTTPS://A.TEST/a",
+            "https://a.test/a?q=1",
+            "https://a.test/a?",
+            "https://a.test/a b",
+            "https://a.test/café",
+        ] {
+            let (server, _) = serve(vec![("20200101000000", original)]).await;
+            let got = archive(&server, "")
+                .snapshot(&target(), day(2021, 6, 1), soon())
+                .await;
+            assert!(got.is_ok(), "{original}: {got:?}");
+        }
     }
 
     #[tokio::test]
