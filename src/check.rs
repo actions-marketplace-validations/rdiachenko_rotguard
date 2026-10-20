@@ -304,16 +304,16 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
             reason: last.status.to_string(),
         },
         401 | 403 | 429 | 999 | 500..=599 => unverifiable(last.status.to_string()),
-        200..=299 => {
-            if host.soft404
-                && chain[0].url.path() != "/"
-                && chain[1..].iter().any(|hop| hop.url.path() == "/")
-            {
-                return Verdict::Suspect {
-                    chain: chain.clone(),
-                    reason: "redirect to root".to_owned(),
-                };
+        _ if host.soft404
+            && chain[0].url.path() != "/"
+            && chain[1..].iter().any(|hop| hop.url.path() == "/") =>
+        {
+            Verdict::Suspect {
+                chain: chain.clone(),
+                reason: "redirect to root".to_owned(),
             }
+        }
+        200..=299 => {
             let leading = chain
                 .iter()
                 .take_while(|hop| matches!(hop.status, 301 | 308))
@@ -1187,6 +1187,25 @@ mod tests {
     fn a_redirect_to_the_root_that_ends_in_404_stays_dead() {
         let outcome = chain_of(vec![deep_hop(301), root_hop(404)]);
         assert_eq!(classify(&outcome, &HostConfig::default()), dead("404"));
+    }
+
+    #[test]
+    fn a_redirect_to_the_root_is_suspect_whatever_the_final_status() {
+        for (first, last) in [(301, 400), (302, 405)] {
+            let outcome = chain_of(vec![deep_hop(first), root_hop(last)]);
+            assert_eq!(
+                classify(&outcome, &HostConfig::default()),
+                suspect(&outcome),
+                "{first} -> {last}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redirect_to_the_root_ending_in_400_is_unverifiable_when_soft404_is_off() {
+        let outcome = chain_of(vec![deep_hop(301), root_hop(400)]);
+        let off = HostConfig { soft404: false };
+        assert_eq!(classify(&outcome, &off), unverifiable("400"));
     }
 
     fn config_for(extra: &str) -> Config {
