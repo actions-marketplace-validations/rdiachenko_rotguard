@@ -46,7 +46,6 @@ fn parse(out: &Out) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn format_s1_text_is_the_default() {
     let w = dead_world().await;
     let gone = w.url("/gone");

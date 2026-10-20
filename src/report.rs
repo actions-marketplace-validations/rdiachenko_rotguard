@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::check::{Hop, Verdict};
-use crate::{Finding, Fix};
+use crate::{Finding, Fix, Format};
 
 /// Counts of distinct URLs by outcome, computed by the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -16,6 +16,14 @@ pub struct Summary {
     pub suspect: usize,
     pub unverifiable: usize,
     pub ignored: usize,
+}
+
+/// Renders the report in `format`.
+#[must_use]
+pub fn render_as(format: Format, findings: &[Finding], summary: &Summary) -> String {
+    match format {
+        Format::Text => render(findings, summary),
+    }
 }
 
 /// Renders one entry per non-ok finding, sorted by file then line, then the summary line.

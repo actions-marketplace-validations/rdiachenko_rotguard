@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use globset::{GlobBuilder, GlobSetBuilder};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -86,6 +86,16 @@ pub struct Args {
     /// Fail on any finding, not only on broken links.
     #[arg(long)]
     pub strict: bool,
+    /// Report format.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+}
+
+/// How the report is printed on stdout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Format {
+    /// One line per finding, then a summary line.
+    Text,
 }
 
 /// `err` and each of its sources, joined by ": ".
@@ -129,7 +139,7 @@ pub fn run(args: Args) -> ExitCode {
     } else {
         Vec::new()
     };
-    println!("{}", report::render(&findings, &summary));
+    println!("{}", report::render_as(args.format, &findings, &summary));
     for err in &apply_errors {
         eprintln!("rotguard: applying fixes: {}", chain(err));
     }
