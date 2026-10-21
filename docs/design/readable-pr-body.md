@@ -349,6 +349,7 @@ Run `rotguard --apply` to write them.
 | `not verbatim` | `the file writes the URL differently from the link` |
 | `cannot quote` | `the new URL can't be written inside this link` |
 | `changed during run` | `the file changed while rotguard ran` |
+| a suspect's proposed fix (`--apply` never writes it) | `rotguard doesn't rewrite suspect links; archived copy: {fix url}`, the URL as in R6 |
 
 **Counts line.** `{checked} link|links checked: {ok} ok`, then each nonzero count in this order:
 `{permanent} moved permanently`, `{temporary} moved temporarily`, `{dead} dead`,
@@ -398,5 +399,7 @@ Unchanged: only `src/apply.rs` writes files; tests use no real-network URLs;
 ### Review changes
 - Round 1: S8 and S9 get their own one-line site and S8 states the exact report file, which the
   amended `action_s1` also expects (S1's two-line site gave `2 places`).
+- Branch review: a suspect's proposed fix goes to `Needs a hand fix` with its own reason row,
+  since `--apply` never writes it (it showed under `Fixes to apply` with `Nothing.` to fix).
 - Round 1: parked to the backlog: after an apply error (exit 2) the report still says
   ``Run `rotguard --apply` `` for the fixes it couldn't write.

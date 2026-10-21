@@ -465,6 +465,14 @@ pub fn render_markdown(findings: &[Finding], summary: &Summary) -> String {
         let problem = md_problem(&finding.verdict);
         match &finding.fix {
             Fix::Applied(url) => fixed.add(finding, vec![link, md_link(url), problem]),
+            // `--apply` never writes a suspect's fix, so it always needs a hand.
+            Fix::Proposed(url) if matches!(finding.verdict, Verdict::Suspect { .. }) => {
+                let reason = format!(
+                    "rotguard doesn't rewrite suspect links; archived copy: {}",
+                    md_link(url)
+                );
+                by_hand.add(finding, vec![link, problem, reason]);
+            }
             Fix::Proposed(url) => to_apply.add(finding, vec![link, md_link(url), problem]),
             Fix::Manual(reason) => {
                 by_hand.add(finding, vec![link, problem, md_reason(*reason).into()]);
@@ -957,6 +965,31 @@ mod tests {
              4 links checked: 1 ok, 1 moved permanently, 1 dead, 1 suspect."
         );
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn markdown_suspect_fix_needs_a_hand() {
+        let suspect = Verdict::Suspect {
+            chain: vec![
+                hop("https://old.test/x", 301),
+                hop("https://old.test/", 200),
+            ],
+            reason: "redirect to root".into(),
+        };
+        let fix = Fix::Proposed("https://web.test/s".into());
+        let out = render_markdown(&[finding("a.md", 1, suspect, fix)], &summary());
+        assert!(
+            out.contains("## Needs a hand fix: 1 link in 1 place"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "| a.md | 1 | <https://old.test/x#frag> | suspect (redirect to root) | \
+                 rotguard doesn't rewrite suspect links; archived copy: <https://web.test/s> |"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("Fixes to apply"), "{out}");
     }
 
     #[test]
