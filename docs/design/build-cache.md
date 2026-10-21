@@ -184,7 +184,10 @@ none
   echo "key=rotguard-$RUNNER_OS-$rustc_version-$lock_hash" >> "$GITHUB_OUTPUT"
   ```
 
-  It writes `rustc` as a second output so `restore-keys` can be built from it.
+  It writes `rustc` as a second output so `restore-keys` can be built from it. Its last line
+  touches every file under `$GITHUB_ACTION_PATH/src` when that folder exists: the action's files
+  carry their commit time, which can be older than a restored build, and cargo would then reuse
+  an old rotguard binary. Rotguard itself (about 14 s) rebuilds every run; the dependencies don't.
 - `73cb3858a687a849` is the first 16 hex digits of the SHA-256 of `x\n` (checked with both
   `sha256sum` and `shasum -a 256`).
 - The `with:` paths take `${{ github.action_path }}`, which GitHub sets only in composite
@@ -210,3 +213,5 @@ Unchanged: only `src/apply.rs` writes files; tests use no real-network URLs;
 - Round 1: `actions/cache` became `actions/cache/restore` before the build and
   `actions/cache/save` after the run step (R4, D3), since `actions/cache` saves only when the
   whole job succeeds and the site job fails on every hand-fix week.
+- Branch review: the key step touches `$GITHUB_ACTION_PATH/src`, so a restored build is never
+  newer than rotguard's sources (both reviewers reproduced cargo reusing an old binary).

@@ -19,6 +19,8 @@ runs:
         lock_hash=$(sha256sum "$GITHUB_ACTION_PATH/Cargo.lock" | cut -c1-16)
         echo "rustc=$rustc_version" >> "$GITHUB_OUTPUT"
         echo "key=rotguard-$RUNNER_OS-$rustc_version-$lock_hash" >> "$GITHUB_OUTPUT"
+        # The action's files carry their commit time, which can be older than a restored build.
+        if [ -d "$GITHUB_ACTION_PATH/src" ]; then find "$GITHUB_ACTION_PATH/src" -type f -exec touch {} +; fi
     - id: cache
       name: Restore the build cache
       uses: actions/cache/restore@v6

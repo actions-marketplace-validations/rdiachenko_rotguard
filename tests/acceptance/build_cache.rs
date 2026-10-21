@@ -183,3 +183,80 @@ fn build_cache_s2_key_step_writes_the_rustc_version_and_the_key() {
         );
     }
 }
+
+/// Not a design scenario: the review found that a restored build could look newer than
+/// rotguard's sources, so the key step marks them as changed.
+#[test]
+fn build_cache_key_step_marks_the_sources_as_changed() {
+    let action = action();
+    let key_step = steps(&action)
+        .iter()
+        .find(|s| s["id"].as_str() == Some("key"))
+        .expect("action.yml has a step with id: key");
+
+    let work = tempfile::tempdir().expect("temp dir");
+    let script_path = work.path().join("step.sh");
+    fs::write(&script_path, run_text(key_step)).expect("write step script");
+
+    let action_dir = work.path().join("action");
+    fs::create_dir_all(action_dir.join("src/nested")).expect("create src dirs");
+    fs::write(action_dir.join("Cargo.lock"), "x\n").expect("write Cargo.lock");
+    let sources = [
+        action_dir.join("src/main.rs"),
+        action_dir.join("src/nested/mod.rs"),
+    ];
+    for source in &sources {
+        fs::write(source, "fn main() {}\n").expect("write source");
+        let status = Command::new("touch")
+            .args(["-t", "200101010000"])
+            .arg(source)
+            .status()
+            .expect("run touch");
+        assert!(status.success(), "touch -t failed");
+    }
+
+    let stubs = work.path().join("stubs");
+    fs::create_dir(&stubs).expect("create stub dir");
+    for (name, body) in [
+        ("rustup", "#!/bin/sh\nexit 0\n"),
+        (
+            "rustc",
+            "#!/bin/sh\necho 'rustc 1.95.0 (0123abcd 2026-09-15)'\n",
+        ),
+    ] {
+        let path = stubs.join(name);
+        fs::write(&path, body).expect("write stub");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+    }
+    let github_output = work.path().join("output");
+    fs::write(&github_output, "").expect("create GITHUB_OUTPUT");
+
+    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
+    let system_path = std::env::var("PATH").expect("PATH is set");
+    let output = Command::new(bash())
+        .args(["--noprofile", "--norc", "-eo", "pipefail"])
+        .arg(&script_path)
+        .env("GITHUB_ACTION_PATH", &action_dir)
+        .env("RUNNER_OS", "Linux")
+        .env("GITHUB_OUTPUT", &github_output)
+        .env("PATH", format!("{}:{system_path}", stubs.display()))
+        .output()
+        .expect("run bash");
+
+    assert!(
+        output.status.success(),
+        "key step exited with {:?}: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for source in &sources {
+        let modified = fs::metadata(source)
+            .and_then(|meta| meta.modified())
+            .expect("read mtime");
+        assert!(
+            modified >= started,
+            "{} still has its old time",
+            source.display()
+        );
+    }
+}
