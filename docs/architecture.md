@@ -24,9 +24,10 @@ links, redirects and soft-404s. It reports each broken link with a proposed fix,
             └──────────────────┘ └──────────────────────────┘
 ```
 
-- **Linked websites**: a timeout, TLS error, 429 or 5xx makes a link `UNVERIFIABLE`, not dead.
-  A 401, 403 or 999 is `BLOCKED` when a made-up URL beside it gets the same status, else
-  `UNVERIFIABLE`. Only a 404, 410 or a missing host on two tries makes a link `DEAD`.
+- **Linked websites**: a timeout, TLS error, failed DNS lookup, 429 or 5xx makes a link
+  `UNVERIFIABLE`, not dead. A 401, 403 or 999 is `BLOCKED` when a made-up URL beside it gets the
+  same status, else `UNVERIFIABLE`. Only a 404, 410 or a host DNS says doesn't exist, on two
+  tries, makes a link `DEAD`.
 - **Wayback Machine**: when it fails or has no capture, the finding says `manual fix: no
   archived copy` or `archive unreachable`, and nothing is written.
 - **GitHub Actions**: the site owner can also run the binary from `action.yml` on a schedule. The
@@ -115,6 +116,8 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
   source with no secret, and only exit 0 or 1 opens a PR (`docs/design/weekly-fix-pr.md`, D1, D6).
 - The PR body is the markdown report, rendered by rotguard; the log and the job summary show the
   same report (`docs/design/readable-pr-body.md`, D1, D4).
+- A DNS failure is dead only when the answer says the name doesn't exist; any other lookup
+  failure is unverifiable, so it never leads to a write (`docs/design/dns-hiccup.md`, D1).
 
 ## Limits
 

@@ -78,7 +78,7 @@ rotguard reads `rotguard.toml` from the site directory (the directory you run it
 - Type: integer, milliseconds.
 - Default: `5000`.
 - Valid values: `0` or more.
-- Effect: the wait before a URL that came back dead (404, 410 or no DNS answer) is fetched once more. The second answer decides the verdict.
+- Effect: the wait before a URL that came back dead (404, 410 or a host DNS says doesn't exist) is fetched once more. The second answer decides the verdict.
 - Error: a negative number or a wrong type prints `invalid rotguard.toml`.
 
 ### `timeout_ms`
