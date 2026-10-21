@@ -239,3 +239,18 @@ async fn progress_s7_readme_configure_example_loads_and_links_to_the_config_doc(
 
     run_with_config(&block).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn progress_quiet_run_prints_nothing_on_stderr() {
+    let w = World::new().await;
+    w.serve(Routes::new().fixed("/gone", status(404))).await;
+    let gone = w.url("/gone");
+    w.archive(Cdx::new(vec![Capture::of("20220101000000", &gone)]));
+    w.site.write("post.md", &format!("[x]({gone})\n"));
+
+    let out = w.run(&["--quiet"]).await;
+
+    assert_eq!(out.stderr, "", "stderr:\n{}", out.stderr);
+    assert_eq!(out.entry(&gone).verdict, "DEAD 404");
+    out.assert_code(1);
+}

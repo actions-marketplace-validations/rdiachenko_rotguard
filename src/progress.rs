@@ -19,11 +19,12 @@ pub enum Phase {
 /// <snapshot|snapshots>` and `looked up <N> <snapshot|snapshots> in <T>s`. On a terminal (`live`
 /// true), one line is rewritten in place: `checking links: <D>/<N> done` or `looking up
 /// snapshots: <D>/<N> done`, cleared and replaced by the end line when the phase ends.
-/// Write errors are ignored: progress never fails a run.
+/// Write errors are ignored: progress never fails a run. A quiet `Progress` writes nothing.
 #[derive(Debug)]
 pub struct Progress<W: Write> {
     out: W,
     live: bool,
+    quiet: bool,
     phase: Option<Running>,
 }
 
@@ -73,10 +74,13 @@ impl Running {
 }
 
 impl Progress<io::Stderr> {
-    /// Progress on stderr, live when stderr is a terminal.
+    /// Progress on stderr, live when stderr is a terminal, or nothing at all when `quiet`.
     #[must_use]
-    pub fn stderr() -> Self {
-        Self::new(io::stderr(), io::stderr().is_terminal())
+    pub fn stderr(quiet: bool) -> Self {
+        Self {
+            quiet,
+            ..Self::new(io::stderr(), io::stderr().is_terminal())
+        }
     }
 }
 
@@ -87,6 +91,7 @@ impl<W: Write> Progress<W> {
         Self {
             out,
             live,
+            quiet: false,
             phase: None,
         }
     }
@@ -132,6 +137,9 @@ impl<W: Write> Progress<W> {
     }
 
     fn write(&mut self, text: &str) {
+        if self.quiet {
+            return;
+        }
         // Progress never fails a run, so write and flush errors are ignored.
         let _ = self.out.write_all(text.as_bytes());
         let _ = self.out.flush();

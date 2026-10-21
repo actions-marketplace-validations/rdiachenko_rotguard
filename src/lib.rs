@@ -89,6 +89,9 @@ pub struct Args {
     /// Fail on any finding, not only on broken links, and list links on hosts that block rotguard.
     #[arg(long)]
     pub strict: bool,
+    /// Don't print progress lines on stderr; errors are still printed.
+    #[arg(long)]
+    pub quiet: bool,
     /// Report format.
     #[arg(long, value_enum, default_value_t = Format::Text)]
     pub format: Format,
@@ -139,7 +142,7 @@ pub fn run(args: Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut progress = Progress::stderr();
+    let mut progress = Progress::stderr(args.quiet);
     let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg, &mut progress));
     // Hung requests must not hold the process past the deadline.
     runtime.shutdown_background();
