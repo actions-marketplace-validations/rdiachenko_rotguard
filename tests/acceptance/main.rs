@@ -3,6 +3,7 @@
 
 mod action;
 mod apply;
+mod apply_failed;
 mod archive;
 mod blocked;
 mod build_cache;
