@@ -7,6 +7,7 @@ mod archive;
 mod blocked;
 mod check;
 mod config;
+mod dns;
 mod extract;
 mod format;
 mod markdown;
