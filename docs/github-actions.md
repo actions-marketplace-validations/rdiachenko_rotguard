@@ -1,6 +1,6 @@
 # Run rotguard weekly on a site
 
-Copy this workflow to `.github/workflows/rotguard.yml` on the site. Every Monday at 06:00 UTC it runs `rotguard --apply` on the site's `main` and opens a pull request with the safe fixes. The PR body is rotguard's report. If a link needs a hand fix, the job fails after the PR step.
+Copy this workflow to `.github/workflows/rotguard.yml` on the site. Every Monday at 06:00 UTC it runs `rotguard --apply` on the site's `main` and opens a pull request with the safe fixes. The PR body is rotguard's markdown report: what it fixed, what needs a hand fix, and a folded list of the rest. The run's summary page shows the same report. If a link needs a hand fix, the job fails after the PR step.
 
 ```yaml
 name: rotguard
@@ -47,7 +47,7 @@ jobs:
     secrets: inherit
 ```
 
-The job reads the action's outputs `exit-code` and `report`. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
+The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
 
 ## Two settings
 

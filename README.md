@@ -24,6 +24,7 @@ rotguard --apply         # also write the proposed fixes into the files
 rotguard --strict        # also fail on temporary redirects, unverifiable and blocked links
 rotguard --format json      # the report as JSON, for scripts
 rotguard --format html > report.html   # a page to open in a browser
+rotguard --format markdown  # the report as markdown, for a PR body
 ```
 
 The JSON report is an object with `findings` and `summary`. Each finding has `file`, `line`, `url`,

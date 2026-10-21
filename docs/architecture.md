@@ -52,13 +52,14 @@ One crate, `src/`:
 - `apply.rs`: writes proposed fixes for permanent redirects and dead links. It writes only
   markdown link destinations and TOML front-matter strings, re-reads each file first, and
   replaces it atomically.
-- `report.rs`: renders findings and the summary line as text, JSON or HTML.
+- `report.rs`: renders findings and the summary line as text, JSON, HTML or markdown.
 - `progress.rs`: progress on stderr, one rewritten line on a terminal, plain lines when piped.
 - `lib.rs`: `run(Args) -> ExitCode` wires it together; `main.rs` only parses arguments.
 
 Outside `src/`, `action.yml` is a composite GitHub Action. It builds rotguard on the runner, runs
-`--apply` and outputs the exit code and the path of a markdown report. The site's workflow, shown
-in `docs/github-actions.md`, uses those outputs to open the pull request.
+`--apply --format markdown`, writes the report to the job summary and outputs the exit code and
+the path of the report. The site's workflow, shown in `docs/github-actions.md`, uses those
+outputs to open the pull request.
 
 ## Main flows
 
@@ -105,13 +106,15 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
 - Soft-404s are detected by probing, not by a list of known sites (`docs/design/link-health.md`, D4).
 - Progress goes to stderr, so stdout stays a clean report for scripts
   (`docs/design/progress-and-config.md`, D1).
-- One `--format` flag picks text, JSON or HTML; JSON keys are stable and always present
+- One `--format` flag picks text, JSON, HTML or markdown; JSON keys are stable and always present
   (`docs/design/report-format.md`, D1, D3).
 - `robots.txt` is not consulted (`docs/design/link-health.md`, D9).
 - A 401, 403 or 999 is a bot wall only when a same-folder probe gets the same status, and blocked
   links are listed only with `--strict` (`docs/design/bot-walls.md`, D1, D2).
 - The weekly run lives in CI, not in the binary: a composite action builds rotguard from its own
   source with no secret, and only exit 0 or 1 opens a PR (`docs/design/weekly-fix-pr.md`, D1, D6).
+- The PR body is the markdown report, rendered by rotguard; the log and the job summary show the
+  same report (`docs/design/readable-pr-body.md`, D1, D4).
 
 ## Limits
 

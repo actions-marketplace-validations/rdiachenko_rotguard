@@ -1,5 +1,6 @@
 ---
 status: approved
+superseded-by: docs/design/readable-pr-body.md
 ---
 # Weekly fix PR: run `rotguard --apply` on a schedule and open a PR
 
