@@ -251,7 +251,7 @@ fn action_s4_action_yml_has_the_agreed_shape() {
         Some("${{ steps.run.outputs.report }}")
     );
 
-    for step in steps {
+    for step in steps.iter().filter(|step| step.get("uses").is_none()) {
         assert_eq!(step["shell"].as_str(), Some("bash"), "step: {step:?}");
         assert!(!run_text(step).contains("${{"), "step: {step:?}");
     }
