@@ -20,7 +20,6 @@ fn assert_path(req: &Req, pattern: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn directory_probe_s1_root_probe_clears_directory() {
     let w = World::new().await;
     let home = page("Docs home", "alpha beta gamma delta epsilon");
@@ -43,7 +42,6 @@ async fn directory_probe_s1_root_probe_clears_directory() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn directory_probe_s2_sibling_probe_keeps_suspect() {
     let w = World::new().await;
     w.serve(
@@ -68,7 +66,6 @@ async fn directory_probe_s2_sibling_probe_keeps_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn directory_probe_s3_two_probes_per_directory_group() {
     let w = World::new().await;
     w.serve(
@@ -105,7 +102,6 @@ async fn directory_probe_s3_two_probes_per_directory_group() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn directory_probe_s4_blocked_directory_is_blocked_under_strict() {
     let w = World::new().await;
     w.serve(

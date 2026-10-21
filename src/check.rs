@@ -493,10 +493,12 @@ enum ProbeResult {
     Failed,
 }
 
-/// Probes by (origin, parent path); each cell is filled by the first check that needs it.
-type ProbeCache = HashMap<(String, String), Arc<OnceCell<Arc<ProbeResult>>>>;
+/// Probes by (origin, parent path, whether the path ends in `/`); each cell is filled by the
+/// first check that needs it.
+type ProbeCache = HashMap<(String, String, bool), Arc<OnceCell<Arc<ProbeResult>>>>;
 
-/// Probe results shared by all checks, one fetch per (origin, parent path).
+/// Probe results shared by all checks, one fetch per (origin, parent path, whether the path
+/// ends in `/`).
 #[derive(Debug, Default)]
 struct Probes {
     cache: StdMutex<ProbeCache>,
@@ -550,16 +552,21 @@ impl Probes {
         })
     }
 
-    /// The probe for `url`'s parent path, fetched by the first caller.
+    /// The probe for `url`'s parent path, fetched by the first caller. A path ending in `/`
+    /// (other than `/`) is a directory: its last segment is replaced and the `/` kept.
     async fn probe(&self, fetcher: &Fetcher, url: &Url) -> Arc<ProbeResult> {
-        let parent = url.path().rsplit_once('/').map_or("/", |(dir, _)| dir);
+        let path = url.path();
+        let dir = path.len() > 1 && path.ends_with('/');
+        let path = if dir { &path[..path.len() - 1] } else { path };
+        let parent = path.rsplit_once('/').map_or("/", |(parent, _)| parent);
         let cell = {
             let mut cache = self.cache.lock().expect("no code panics holding this lock");
-            let key = (url.origin().ascii_serialization(), parent.to_owned());
+            let key = (url.origin().ascii_serialization(), parent.to_owned(), dir);
             Arc::clone(cache.entry(key).or_default())
         };
         let mut target = url.clone();
-        target.set_path(&format!("{parent}/{}", random_token()));
+        let slash = if dir { "/" } else { "" };
+        target.set_path(&format!("{parent}/{}{slash}", random_token()));
         target.set_query(None);
         target.set_fragment(None);
         let probe = cell
@@ -1712,6 +1719,33 @@ mod tests {
             .unwrap()
             .to_owned();
         assert_eq!(token.len(), 24);
+    }
+
+    #[tokio::test]
+    async fn a_url_ending_in_slash_gets_one_sibling_probe_ending_in_slash() {
+        let server = MockServer::start().await;
+        mount(&server, "^/docs/real/$", page("T", "some page text here")).await;
+        let target = url(&server, "/docs/real/");
+        let got = check_all(vec![target.clone()], &config_for(""), far(), |_| {}).await;
+        assert!(
+            matches!(got[&target], Verdict::Ok { .. }),
+            "{:?}",
+            got[&target]
+        );
+        let probes: Vec<_> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.url.path() != "/docs/real/")
+            .collect();
+        assert_eq!(probes.len(), 1, "{probes:?}");
+        let path = probes[0].url.path();
+        let token = path
+            .strip_prefix("/docs/")
+            .and_then(|rest| rest.strip_suffix('/'))
+            .unwrap_or_else(|| panic!("unexpected probe path {path}"));
+        assert_eq!(token.len(), 24, "{path}");
     }
 
     /// Label, routes, config, requested path, suspect reason (None for ok), request count.
