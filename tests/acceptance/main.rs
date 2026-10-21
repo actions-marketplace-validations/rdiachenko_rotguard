@@ -16,6 +16,7 @@ mod format;
 mod markdown;
 mod progress;
 mod report;
+mod root_redirect;
 mod simplify;
 mod soft404;
 mod support;
