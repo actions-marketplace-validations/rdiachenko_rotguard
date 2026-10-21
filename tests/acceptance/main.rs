@@ -5,6 +5,7 @@ mod action;
 mod apply;
 mod archive;
 mod blocked;
+mod build_cache;
 mod check;
 mod config;
 mod dns;
