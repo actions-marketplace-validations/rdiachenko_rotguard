@@ -1,13 +1,16 @@
 //! Formats the findings and the summary line printed on stdout.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt::{self, Write as _};
 
 use serde::Serialize;
 use url::Url;
 
+use crate::apply::Unwritable;
+use crate::archive::NoFix;
 use crate::check::{Hop, Verdict};
-use crate::{Finding, Fix, Format};
+use crate::{Finding, Fix, Format, ManualReason};
 
 /// Counts of distinct URLs by outcome, computed by the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -30,6 +33,7 @@ pub fn render_as(format: Format, findings: &[Finding], summary: &Summary) -> Str
         Format::Text => render(findings, summary),
         Format::Json => render_json(findings, summary),
         Format::Html => render_html(findings, summary),
+        Format::Markdown => render_markdown(findings, summary),
     }
 }
 
@@ -322,13 +326,227 @@ pub fn render_html(findings: &[Finding], summary: &Summary) -> String {
     out
 }
 
+/// `s` with markdown-special characters backslash-escaped and control characters as spaces.
+fn md_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_control() {
+            out.push(' ');
+        } else {
+            if "\\`*_[]<>()!|~&#".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// `url` as an autolink when it is a plain http(s) URL, otherwise as escaped text.
+fn md_link(url: &str) -> String {
+    let plain = (url.starts_with("http://") || url.starts_with("https://"))
+        && !url.contains(|c: char| c.is_control() || " <>|`\\".contains(c));
+    if plain {
+        format!("<{url}>")
+    } else {
+        md_escape(url)
+    }
+}
+
+/// The Problem cell of a reported finding.
+fn md_problem(verdict: &Verdict) -> String {
+    match verdict {
+        // `reported` drops ok findings.
+        Verdict::Ok { .. } => unreachable!("ok findings are not reported"),
+        Verdict::Permanent { chain, .. } => {
+            format!("moved permanently ({})", md_escape(&statuses(chain)))
+        }
+        Verdict::Temporary { chain, final_url } => format!(
+            "moved temporarily ({}) to {}",
+            md_escape(&statuses(chain)),
+            md_link(final_url.as_str())
+        ),
+        Verdict::Dead { reason } => format!("dead ({})", md_escape(reason)),
+        Verdict::Suspect { reason, .. } => format!("suspect ({})", md_escape(reason)),
+        Verdict::Unverifiable { reason } => format!("could not check ({})", md_escape(reason)),
+        Verdict::Blocked { status } => {
+            format!("blocked by a bot wall ({})", md_escape(&status.to_string()))
+        }
+    }
+}
+
+/// The reason cell of a fix that needs a hand edit.
+fn md_reason(reason: ManualReason) -> &'static str {
+    match reason {
+        ManualReason::Archive(NoFix::NoCapture) => "no archived copy in the Wayback Machine",
+        ManualReason::Archive(NoFix::Unreachable) => "the Wayback Machine didn't answer",
+        ManualReason::Archive(NoFix::Deadline) => {
+            "the run ran out of time looking for an archived copy"
+        }
+        ManualReason::Unwritable(Unwritable::NotVerbatim) => {
+            "the file writes the URL differently from the link"
+        }
+        ManualReason::Unwritable(Unwritable::CannotQuote) => {
+            "the new URL can't be written inside this link"
+        }
+        ManualReason::ChangedDuringRun => "the file changed while rotguard ran",
+    }
+}
+
+fn plural(count: usize, one: &'static str, many: &'static str) -> &'static str {
+    if count == 1 { one } else { many }
+}
+
+/// The rows of one markdown section: findings merged by page and cells.
+#[derive(Default)]
+struct Section<'a> {
+    /// Page, line numbers and the cells after the Lines cell.
+    rows: Vec<(String, Vec<u32>, Vec<String>)>,
+    places: usize,
+    urls: HashSet<&'a str>,
+}
+
+impl<'a> Section<'a> {
+    fn add(&mut self, finding: &'a Finding, cells: Vec<String>) {
+        let page = display_path(finding);
+        let line = finding.link.line;
+        self.places += 1;
+        self.urls.insert(&finding.link.url);
+        match self
+            .rows
+            .iter_mut()
+            .find(|row| row.0 == page && row.2 == cells)
+        {
+            Some(row) => row.1.push(line),
+            None => self.rows.push((page, vec![line], cells)),
+        }
+    }
+
+    fn heading(&self, title: &str) -> String {
+        let (links, places) = (self.urls.len(), self.places);
+        format!(
+            "{title}: {links} {} in {places} {}",
+            plural(links, "link", "links"),
+            plural(places, "place", "places")
+        )
+    }
+
+    fn table(&self, header: &str) -> String {
+        let columns = header.matches('|').count() - 1;
+        let mut out = format!("{header}\n|{}\n", "---|".repeat(columns));
+        for (page, lines, cells) in &self.rows {
+            let lines = lines.iter().map(u32::to_string).collect::<Vec<_>>();
+            write!(out, "| {} | {} |", md_escape(page), lines.join(", "))
+                .expect("writing to a String cannot fail");
+            for cell in cells {
+                write!(out, " {cell} |").expect("writing to a String cannot fail");
+            }
+            out.push('\n');
+        }
+        out.pop();
+        out
+    }
+}
+
+const FIX_HEADER: &str = "| Page | Lines | Old link | New link | Why |";
+
+/// Renders the report as markdown for a pull request body: the findings grouped by what was
+/// done about them, then the counts line. No trailing newline.
+#[must_use]
+pub fn render_markdown(findings: &[Finding], summary: &Summary) -> String {
+    let mut fixed = Section::default();
+    let mut to_apply = Section::default();
+    let mut by_hand = Section::default();
+    let mut folded = Section::default();
+    let reported = reported(findings);
+    let nothing = reported.is_empty();
+    for finding in reported {
+        let link = md_link(&finding.link.url);
+        let problem = md_problem(&finding.verdict);
+        match &finding.fix {
+            Fix::Applied(url) => fixed.add(finding, vec![link, md_link(url), problem]),
+            Fix::Proposed(url) => to_apply.add(finding, vec![link, md_link(url), problem]),
+            Fix::Manual(reason) => {
+                by_hand.add(finding, vec![link, problem, md_reason(*reason).into()]);
+            }
+            Fix::None => folded.add(finding, vec![link, problem]),
+        }
+    }
+    let mut blocks = Vec::new();
+    if nothing {
+        blocks.push("No broken links.".to_owned());
+    } else {
+        if fixed.places > 0 {
+            blocks.push(fixed.heading("## Fixed"));
+            blocks.push(fixed.table(FIX_HEADER));
+        }
+        if to_apply.places > 0 {
+            blocks.push(to_apply.heading("## Fixes to apply"));
+            blocks.push("Run `rotguard --apply` to write them.".to_owned());
+            blocks.push(to_apply.table(FIX_HEADER));
+        }
+        if by_hand.places > 0 {
+            blocks.push(by_hand.heading("## Needs a hand fix"));
+            blocks.push(
+                by_hand.table("| Page | Lines | Link | Problem | Why rotguard couldn't fix it |"),
+            );
+        } else {
+            blocks.push("## Needs a hand fix".to_owned());
+            blocks.push("Nothing.".to_owned());
+        }
+        if folded.places > 0 {
+            let links = folded.urls.len();
+            blocks.push(format!(
+                "<details><summary>{links} more {} to know about, no action needed</summary>",
+                plural(links, "link", "links")
+            ));
+            blocks.push(folded.table("| Page | Lines | Link | What rotguard saw |"));
+            blocks.push("</details>".to_owned());
+        }
+    }
+    blocks.push(md_counts(summary));
+    blocks.join("\n\n")
+}
+
+fn md_counts(summary: &Summary) -> String {
+    let Summary {
+        checked,
+        ok,
+        permanent,
+        temporary,
+        dead,
+        suspect,
+        unverifiable,
+        blocked,
+        ignored,
+    } = *summary;
+    let mut out = format!(
+        "{checked} {} checked: {ok} ok",
+        plural(checked, "link", "links")
+    );
+    let counts = [
+        (permanent, "moved permanently"),
+        (temporary, "moved temporarily"),
+        (dead, "dead"),
+        (suspect, "suspect"),
+        (unverifiable, "could not check"),
+        (blocked, "blocked"),
+        (ignored, "ignored"),
+    ];
+    for (count, label) in counts {
+        if count > 0 {
+            write!(out, ", {count} {label}").expect("writing to a String cannot fail");
+        }
+    }
+    out.push('.');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ManualReason;
-    use crate::archive::NoFix;
     use crate::extract::{Ctx, Link};
 
     fn finding(file: &str, line: u32, verdict: Verdict, fix: Fix) -> Finding {
@@ -684,5 +902,176 @@ mod tests {
         );
         assert!(out.ends_with("<p>No broken links.</p>"));
         assert!(!out.contains("<table"));
+    }
+
+    #[test]
+    fn markdown_sections_merge_rows_and_fold_the_rest() {
+        let applied = || Fix::Applied("https://new.test/x#frag".into());
+        let manual = |r| Fix::Manual(r);
+        let mut other = finding("a.md", 5, dead(), Fix::None);
+        other.link.url = "https://other.test/".into();
+        let findings = [
+            finding("b.md", 4, permanent(), applied()),
+            finding("a.md", 9, permanent(), applied()),
+            finding("a.md", 2, permanent(), applied()),
+            finding(
+                "a.md",
+                3,
+                permanent(),
+                Fix::Proposed("https://p.test/".into()),
+            ),
+            finding(
+                "a.md",
+                6,
+                dead(),
+                manual(ManualReason::Archive(NoFix::Deadline)),
+            ),
+            other,
+            finding("a.md", 7, Verdict::Blocked { status: 403 }, Fix::None),
+            finding("a.md", 8, Verdict::Ok { chain: vec![] }, Fix::None),
+        ];
+        let out = render_markdown(&findings, &summary());
+        let fixed =
+            "<https://old.test/x#frag> | <https://new.test/x#frag> | moved permanently (301 200) |";
+        let expected = format!(
+            "## Fixed: 1 link in 3 places\n\n\
+             | Page | Lines | Old link | New link | Why |\n\
+             |---|---|---|---|---|\n\
+             | a.md | 2, 9 | {fixed}\n\
+             | b.md | 4 | {fixed}\n\n\
+             ## Fixes to apply: 1 link in 1 place\n\n\
+             Run `rotguard --apply` to write them.\n\n\
+             | Page | Lines | Old link | New link | Why |\n\
+             |---|---|---|---|---|\n\
+             | a.md | 3 | <https://old.test/x#frag> | <https://p.test/> | moved permanently (301 200) |\n\n\
+             ## Needs a hand fix: 1 link in 1 place\n\n\
+             | Page | Lines | Link | Problem | Why rotguard couldn't fix it |\n\
+             |---|---|---|---|---|\n\
+             | a.md | 6 | <https://old.test/x#frag> | dead (404) | the run ran out of time looking for an archived copy |\n\n\
+             <details><summary>2 more links to know about, no action needed</summary>\n\n\
+             | Page | Lines | Link | What rotguard saw |\n\
+             |---|---|---|---|\n\
+             | a.md | 5 | <https://other.test/> | dead (404) |\n\
+             | a.md | 7 | <https://old.test/x#frag> | blocked by a bot wall (403) |\n\n\
+             </details>\n\n\
+             4 links checked: 1 ok, 1 moved permanently, 1 dead, 1 suspect."
+        );
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn markdown_wording_and_counts() {
+        let reasons = [
+            (
+                ManualReason::Archive(NoFix::NoCapture),
+                "no archived copy in the Wayback Machine",
+            ),
+            (
+                ManualReason::Archive(NoFix::Unreachable),
+                "the Wayback Machine didn't answer",
+            ),
+            (
+                ManualReason::Archive(NoFix::Deadline),
+                "the run ran out of time looking for an archived copy",
+            ),
+            (
+                ManualReason::Unwritable(Unwritable::NotVerbatim),
+                "the file writes the URL differently from the link",
+            ),
+            (
+                ManualReason::Unwritable(Unwritable::CannotQuote),
+                "the new URL can't be written inside this link",
+            ),
+            (
+                ManualReason::ChangedDuringRun,
+                "the file changed while rotguard ran",
+            ),
+        ];
+        for (reason, text) in reasons {
+            let out = render_markdown(
+                &[finding("a.md", 1, dead(), Fix::Manual(reason))],
+                &summary(),
+            );
+            assert!(
+                out.contains(&format!("| dead (404) | {text} |")),
+                "{text}\n{out}"
+            );
+        }
+        let verdicts = [
+            (
+                Verdict::Temporary {
+                    chain: vec![hop("https://old.test/x", 302), hop("https://t.test/y", 200)],
+                    final_url: Url::parse("https://t.test/y").unwrap(),
+                },
+                "moved temporarily (302 200) to <https://t.test/y>",
+            ),
+            (
+                Verdict::Suspect {
+                    chain: vec![],
+                    reason: "redirect to root".into(),
+                },
+                "suspect (redirect to root)",
+            ),
+            (
+                Verdict::Unverifiable {
+                    reason: "tls".into(),
+                },
+                "could not check (tls)",
+            ),
+        ];
+        for (verdict, text) in verdicts {
+            let out = render_markdown(&[finding("a.md", 1, verdict, Fix::None)], &summary());
+            assert!(out.contains(&format!("| {text} |")), "{text}\n{out}");
+        }
+        let all = Summary {
+            checked: 9,
+            ok: 1,
+            permanent: 1,
+            temporary: 1,
+            dead: 1,
+            suspect: 1,
+            unverifiable: 1,
+            blocked: 1,
+            ignored: 1,
+        };
+        assert_eq!(
+            md_counts(&all),
+            "9 links checked: 1 ok, 1 moved permanently, 1 moved temporarily, 1 dead, \
+             1 suspect, 1 could not check, 1 blocked, 1 ignored."
+        );
+        let clean = Summary {
+            checked: 1,
+            ok: 1,
+            ..Summary::default()
+        };
+        assert_eq!(
+            render_markdown(&[], &clean),
+            "No broken links.\n\n1 link checked: 1 ok."
+        );
+    }
+
+    #[test]
+    fn markdown_escapes_text_from_the_site() {
+        for c in "\\`*_[]<>()!|~&#".chars() {
+            assert_eq!(md_escape(&format!("a{c}b")), format!("a\\{c}b"), "{c:?}");
+        }
+        assert_eq!(md_escape("a\nb\tc"), "a b c");
+        assert_eq!(md_link("https://x.test/a?b=1"), "<https://x.test/a?b=1>");
+        assert_eq!(md_link("http://x.test"), "<http://x.test>");
+        let cases = [
+            ("space", "https://x.test/a b", "https://x.test/a b"),
+            ("lt", "https://x.test/<", "https://x.test/\\<"),
+            ("gt", "https://x.test/>", "https://x.test/\\>"),
+            ("pipe", "https://x.test/a|b", "https://x.test/a\\|b"),
+            ("backtick", "https://x.test/`", "https://x.test/\\`"),
+            ("backslash", "https://x.test/\\", "https://x.test/\\\\"),
+            ("control", "https://x.test/\u{7}", "https://x.test/ "),
+            ("scheme", "ftp://x.test/", "ftp://x.test/"),
+        ];
+        for (name, url, text) in cases {
+            let got = md_link(url);
+            assert!(!got.starts_with('<'), "{name}: {got}");
+            assert_eq!(got, text, "{name}");
+        }
     }
 }

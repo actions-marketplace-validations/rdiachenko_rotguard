@@ -100,6 +100,8 @@ pub enum Format {
     Json,
     /// One self-contained HTML page with the summary and a table of findings.
     Html,
+    /// Markdown sections for a pull request body, then a counts line.
+    Markdown,
 }
 
 /// `err` and each of its sources, joined by ": ".

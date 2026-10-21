@@ -160,7 +160,6 @@ impl Step {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn markdown_s1_fix_is_one_row_with_both_lines() {
     let w = moved_world().await;
     let (old, new) = (w.url("/old"), w.url("/new"));
@@ -185,7 +184,6 @@ async fn markdown_s1_fix_is_one_row_with_both_lines() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn markdown_s2_proposed_fix_is_not_written() {
     let w = moved_world().await;
     let before = w.site.snapshot();
@@ -200,7 +198,6 @@ async fn markdown_s2_proposed_fix_is_not_written() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn markdown_s3_dead_link_needs_a_hand_fix() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/gone", status(404))).await;
@@ -225,7 +222,6 @@ async fn markdown_s3_dead_link_needs_a_hand_fix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn markdown_s4_temporary_redirect_is_folded_away() {
     let w = World::new().await;
     w.serve(
@@ -256,7 +252,6 @@ async fn markdown_s4_temporary_redirect_is_folded_away() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S5"]
 async fn markdown_s5_clean_site_says_no_broken_links() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/a", status(200))).await;
@@ -268,7 +263,6 @@ async fn markdown_s5_clean_site_says_no_broken_links() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn markdown_s6_text_from_the_site_is_escaped() {
     let w = World::new().await;
     w.serve(Routes::new().fixed("/a|b", status(404))).await;
@@ -288,7 +282,6 @@ async fn markdown_s6_text_from_the_site_is_escaped() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S7"]
 async fn markdown_s7_strict_lists_a_bot_wall_in_the_folded_block() {
     let w = World::new().await;
     w.serve(Routes::new().fixed_re("^/wall/", status(403)))
