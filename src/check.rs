@@ -232,6 +232,11 @@ fn map_err(err: reqwest::Error) -> FetchError {
         messages.push(e.to_string().to_lowercase());
         source = e.source();
     }
+    error_kind(&messages)
+}
+
+/// Classifies lowercased messages: the error without its URL, then each source.
+pub fn error_kind(messages: &[String]) -> FetchError {
     let mentions = |needles: &[&str]| {
         messages
             .iter()
