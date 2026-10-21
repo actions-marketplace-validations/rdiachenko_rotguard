@@ -30,7 +30,6 @@ fn dns_s1_missing_name_is_dns() {
 }
 
 #[test]
-#[ignore = "pending: S2"]
 fn dns_s2_resolver_hiccup_is_dns_failed() {
     let lists: [&[&str]; 3] = [
         &[
@@ -68,7 +67,6 @@ fn dns_s3_other_kinds_are_unchanged() {
 }
 
 #[test]
-#[ignore = "pending: S4"]
 fn dns_s4_resolver_hiccup_is_unverifiable() {
     let outcome = Err(error_kind(&messages(&["dns error"])));
     assert_eq!(

@@ -49,6 +49,8 @@ pub struct Fetched {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchError {
     Dns,
+    /// A lookup that failed without proving the host is gone.
+    DnsFailed,
     Timeout,
     Tls,
     Connect,
@@ -64,6 +66,7 @@ impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Dns => "dns",
+            Self::DnsFailed => "dns lookup failed",
             Self::Timeout => "timeout",
             Self::Tls => "tls",
             Self::Connect => "connection",
@@ -243,13 +246,18 @@ pub fn error_kind(messages: &[String]) -> FetchError {
             .any(|message| needles.iter().any(|needle| message.contains(needle)))
     };
     if mentions(&[
-        "dns error",
-        "failed to lookup address",
         "name or service not known",
-        "nodename nor servname",
+        "nodename nor servname provided",
         "no such host",
+        "no address associated with hostname",
     ]) {
         FetchError::Dns
+    } else if mentions(&[
+        "dns error",
+        "failed to lookup address",
+        "temporary failure in name resolution",
+    ]) {
+        FetchError::DnsFailed
     } else if mentions(&["certificate", "tls", "ssl", "handshake"]) {
         FetchError::Tls
     } else {
@@ -709,7 +717,7 @@ enum Retry {
 
 fn retry_for(outcome: &Result<Fetched, FetchError>) -> Retry {
     match outcome {
-        Err(FetchError::Timeout | FetchError::Connect) => Retry::Transient,
+        Err(FetchError::Timeout | FetchError::Connect | FetchError::DnsFailed) => Retry::Transient,
         Err(_) => Retry::No,
         Ok(fetched) => match fetched.chain.last().map(|hop| hop.status) {
             Some(500..=599) => Retry::Transient,
@@ -1007,6 +1015,7 @@ mod tests {
     fn errors_display_their_reason() {
         let shown: Vec<_> = [
             FetchError::Dns,
+            FetchError::DnsFailed,
             FetchError::Timeout,
             FetchError::Tls,
             FetchError::Connect,
@@ -1021,6 +1030,7 @@ mod tests {
             shown,
             [
                 "dns",
+                "dns lookup failed",
                 "timeout",
                 "tls",
                 "connection",
@@ -1029,6 +1039,14 @@ mod tests {
                 "too many hops"
             ]
         );
+    }
+
+    #[test]
+    fn a_failed_dns_lookup_retries_like_a_connect_failure() {
+        assert!(matches!(
+            retry_for(&Err(FetchError::DnsFailed)),
+            Retry::Transient
+        ));
     }
 
     #[tokio::test]
@@ -1118,6 +1136,11 @@ mod tests {
                 dead("404"),
             ),
             ("dns", Err(FetchError::Dns), dead("dns")),
+            (
+                "dns failed",
+                Err(FetchError::DnsFailed),
+                unverifiable("dns lookup failed"),
+            ),
             ("401", fetched(&[(401, "a")]), unverifiable("401")),
             ("403", fetched(&[(403, "a")]), unverifiable("403")),
             ("429", fetched(&[(429, "a")]), unverifiable("429")),
