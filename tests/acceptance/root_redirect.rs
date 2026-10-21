@@ -4,7 +4,6 @@
 use crate::support::{Routes, World, page, redirect};
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn root_redirect_s1_intermediate_root_hop_keeps_permanent_fix() {
     let w = World::new().await;
     w.serve(

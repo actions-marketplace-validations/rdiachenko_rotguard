@@ -296,8 +296,8 @@ pub enum Verdict {
     },
 }
 
-/// Whether a non-root URL's chain visits the root, which a host with `soft404` treats as a
-/// removed page.
+/// Whether a non-root URL's chain has a hop after the first at the root, which a host with
+/// `soft404` treats as a removed page. A chain ending in 2xx is judged by `classify` instead.
 fn redirects_to_root(chain: &[Hop], host: &HostConfig) -> bool {
     host.soft404
         && chain.split_first().is_some_and(|(first, rest)| {
@@ -307,8 +307,10 @@ fn redirects_to_root(chain: &[Hop], host: &HostConfig) -> bool {
 
 /// Classifies a fetch outcome by its status and redirect chain.
 ///
-/// A non-root URL that redirects to the site root is a soft-404 suspect unless `host` turns
-/// soft-404 detection off.
+/// A non-root URL is a soft-404 suspect, unless `host` turns soft-404 detection off, when its
+/// 2xx chain ends at the site root or its leading 301/308 run does; any other chain is suspect
+/// when it fails or ends in an unexplained status after passing through the root. A middle root
+/// hop in a chain that ends elsewhere doesn't count.
 #[must_use]
 pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Verdict {
     let unverifiable = |reason: String| Verdict::Unverifiable { reason };
@@ -340,16 +342,27 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
             reason: last.status.to_string(),
         },
         401 | 403 | 429 | 999 | 500..=599 => unverifiable(last.status.to_string()),
-        _ if redirects_to_root(chain, host) => Verdict::Suspect {
-            chain: chain.clone(),
-            reason: "redirect to root".to_owned(),
-        },
+        status if !(200..=299).contains(&status) && redirects_to_root(chain, host) => {
+            Verdict::Suspect {
+                chain: chain.clone(),
+                reason: "redirect to root".to_owned(),
+            }
+        }
         200..=299 => {
             let leading = chain
                 .iter()
                 .take_while(|hop| matches!(hop.status, 301 | 308))
                 .count();
-            if leading > 0 {
+            let is_root = |hop: &Hop| hop.url.path() == "/";
+            if host.soft404
+                && !is_root(&chain[0])
+                && (is_root(last) || (leading > 0 && is_root(&chain[leading])))
+            {
+                Verdict::Suspect {
+                    chain: chain.clone(),
+                    reason: "redirect to root".to_owned(),
+                }
+            } else if leading > 0 {
                 // The run ends in a 2xx response, so a next hop exists.
                 let fix = chain[leading].url.clone();
                 Verdict::Permanent {
@@ -1255,6 +1268,13 @@ mod tests {
         }
     }
 
+    fn hop_at(path: &str, status: u16) -> Hop {
+        Hop {
+            url: Url::parse(&format!("https://site.example{path}")).unwrap(),
+            status,
+        }
+    }
+
     fn chain_of(hops: Vec<Hop>) -> Result<Fetched, FetchError> {
         let mut fetched = fetched(&[(200, "x")]).unwrap();
         fetched.chain = hops;
@@ -1351,6 +1371,37 @@ mod tests {
                 Err(FetchError::Loop(vec![deep_hop(301), deep_hop(301)])),
                 true,
                 Expect::Is(unverifiable("redirect loop")),
+            ),
+            (
+                "a middle root hop keeps the permanent fix",
+                chain_of(vec![
+                    hop_at("/archives/123", 301),
+                    hop_at("/?p=123", 301),
+                    hop_at("/2020/post/", 200),
+                ]),
+                true,
+                Expect::Permanent(hop_at("/2020/post/", 200).url),
+            ),
+            (
+                "301 -> root 302 -> 200 is suspect",
+                chain_of(vec![hop_at("/a", 301), hop_at("/", 302), hop_at("/b", 200)]),
+                true,
+                Expect::Suspect,
+            ),
+            (
+                "302 -> root 301 -> 200 is temporary",
+                chain_of(vec![hop_at("/a", 302), hop_at("/", 301), hop_at("/b", 200)]),
+                true,
+                Expect::Is(Verdict::Temporary {
+                    chain: vec![hop_at("/a", 302), hop_at("/", 301), hop_at("/b", 200)],
+                    final_url: hop_at("/b", 200).url,
+                }),
+            ),
+            (
+                "301 -> root 301 -> 400 is suspect",
+                chain_of(vec![hop_at("/a", 301), hop_at("/", 301), hop_at("/x", 400)]),
+                true,
+                Expect::Suspect,
             ),
         ];
         for (name, outcome, soft404, expected) in cases {
