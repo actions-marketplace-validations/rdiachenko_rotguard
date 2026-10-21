@@ -80,7 +80,9 @@ workflow, shown in `docs/github-actions.md`, uses those outputs to open the pull
 **Soft-404 detection**: a 2xx answer is suspect when the page redirected a non-root URL to the
 site root, when its title matches a not-found phrase, or when a probe URL with a random last
 segment under the same parent path returns the same page. Probes are shared per origin and
-parent path. A host with `soft404 = false` skips these checks.
+parent path and whether the path ends in `/`. A link ending in `/` is probed as a sibling folder
+(`/a/b/` probes `/a/<token>/`, `/docs/` probes `/<token>/`); other paths probe `/a/<token>`. A
+host with `soft404 = false` skips these checks.
 
 The same probe decides bot walls: a link whose final status is 401, 403 or 999 is `Blocked`
 when the probe gets that status too, and `Unverifiable` when it answers differently or fails.
@@ -123,6 +125,8 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
   failure is unverifiable, so it never leads to a write (`docs/design/dns-hiccup.md`, D1).
 - A fix `--apply` couldn't write is a hand fix, marked in apply so every report format says so
   (`docs/design/apply-failed-fix.md`, D1).
+- A link ending in `/` is probed with a sibling that ends in `/` too, so the probe takes the same
+  route through the site's server as the link (`docs/design/directory-probe.md`, D1).
 
 ## Limits
 
