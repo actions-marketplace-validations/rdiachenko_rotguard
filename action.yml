@@ -10,6 +10,26 @@ outputs:
 runs:
   using: composite
   steps:
+    - id: key
+      name: Pick the build cache key
+      shell: bash
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustc_version=$(rustc +stable --version | cut -d' ' -f2)
+        lock_hash=$(sha256sum "$GITHUB_ACTION_PATH/Cargo.lock" | cut -c1-16)
+        echo "rustc=$rustc_version" >> "$GITHUB_OUTPUT"
+        echo "key=rotguard-$RUNNER_OS-$rustc_version-$lock_hash" >> "$GITHUB_OUTPUT"
+    - id: cache
+      name: Restore the build cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ${{ github.action_path }}/target
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: rotguard-${{ runner.os }}-${{ steps.key.outputs.rustc }}-
     - name: Build rotguard
       shell: bash
       run: |
@@ -29,3 +49,13 @@ runs:
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         echo "report=$report_file" >> "$GITHUB_OUTPUT"
         exit 0
+    - name: Save the build cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ${{ github.action_path }}/target
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: ${{ steps.key.outputs.key }}

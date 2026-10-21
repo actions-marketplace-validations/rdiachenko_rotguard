@@ -61,7 +61,6 @@ fn path_lines(step: &Value) -> Vec<&str> {
 }
 
 #[test]
-#[ignore = "pending: S1"]
 fn build_cache_s1_action_yml_restores_before_the_build_and_saves_after_the_run() {
     let action = action();
     let steps = steps(&action);
@@ -125,7 +124,6 @@ fn build_cache_s1_action_yml_restores_before_the_build_and_saves_after_the_run()
 }
 
 #[test]
-#[ignore = "pending: S2"]
 fn build_cache_s2_key_step_writes_the_rustc_version_and_the_key() {
     let action = action();
     let key_step = steps(&action)
