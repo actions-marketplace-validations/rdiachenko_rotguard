@@ -89,7 +89,8 @@ This runs whatever the host's `soft404` setting, and shares the probe cache.
 **Apply** (`--apply`, after the check): per file, confirm each finding's span still holds its
 original URL, then rewrite and rename into place. A fix that can't be written safely becomes
 `manual fix: <reason>`; a file that changed during the run is left untouched (`changed during
-run`). An I/O error leaves that file as it was and exits 2.
+run`). An I/O error leaves that file as it was, reports its fixes as `manual fix: write failed`
+and exits 2.
 
 ## Data
 
@@ -120,6 +121,8 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
   same report (`docs/design/readable-pr-body.md`, D1, D4).
 - A DNS failure is dead only when the answer says the name doesn't exist; any other lookup
   failure is unverifiable, so it never leads to a write (`docs/design/dns-hiccup.md`, D1).
+- A fix `--apply` couldn't write is a hand fix, marked in apply so every report format says so
+  (`docs/design/apply-failed-fix.md`, D1).
 
 ## Limits
 

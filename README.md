@@ -88,6 +88,8 @@ link yourself:
   single-quoted string.
 - `no archived copy`, `archive unreachable` or `deadline`: no snapshot was found.
 - `changed during run`: the file was edited while rotguard ran, so it wasn't touched.
+- `write failed`: rotguard couldn't write the file. stderr says why, for example a leftover
+  `<file>.rotguard.tmp`; fix that and run again. rotguard exits 2.
 
 ## Exit codes
 
