@@ -77,12 +77,14 @@ workflow, shown in `docs/github-actions.md`, uses those outputs to open the pull
    temporary, unverifiable and blocked), else 0. Blocked links are listed only with `--strict`;
    the summary always counts them.
 
-**Soft-404 detection**: a 2xx answer is suspect when the page redirected a non-root URL to the
-site root, when its title matches a not-found phrase, or when a probe URL with a random last
-segment under the same parent path returns the same page. Probes are shared per origin and
-parent path and whether the path ends in `/`. A link ending in `/` is probed as a sibling folder
-(`/a/b/` probes `/a/<token>/`, `/docs/` probes `/<token>/`); other paths probe `/a/<token>`. A
-host with `soft404 = false` skips these checks.
+**Soft-404 detection**: a 2xx answer is suspect when a non-root link ends at the site
+root or its permanent fix would point there (a middle hop through `/` doesn't count), when its
+title matches a not-found phrase, or when a probe URL with a random last segment under the same
+parent path returns the same page. A chain that never reaches a page, failed or ending in a
+status such as 400, is suspect if any hop after the first is the root. Probes are shared per
+origin and parent path and whether the path ends in `/`. A link ending in `/` is probed as a
+sibling folder (`/a/b/` probes `/a/<token>/`, `/docs/` probes `/<token>/`); other paths probe
+`/a/<token>`. A host with `soft404 = false` skips these checks.
 
 The same probe decides bot walls: a link whose final status is 401, 403 or 999 is `Blocked`
 when the probe gets that status too, and `Unverifiable` when it answers differently or fails.
@@ -127,6 +129,9 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
   (`docs/design/apply-failed-fix.md`, D1).
 - A link ending in `/` is probed with a sibling that ends in `/` too, so the probe takes the same
   route through the site's server as the link (`docs/design/directory-probe.md`, D1).
+- A redirect to the site root counts only where the link ends up or where its fix would point,
+  so a chain that goes on to a real page keeps its own soft-404 checks
+  (`docs/design/root-redirect.md`, D1).
 
 ## Limits
 
