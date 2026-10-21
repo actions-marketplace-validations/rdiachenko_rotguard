@@ -9,6 +9,7 @@ mod blocked;
 mod build_cache;
 mod check;
 mod config;
+mod directory_probe;
 mod dns;
 mod extract;
 mod format;
