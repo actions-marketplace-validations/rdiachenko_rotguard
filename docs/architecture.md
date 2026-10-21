@@ -57,10 +57,10 @@ One crate, `src/`:
 - `progress.rs`: progress on stderr, one rewritten line on a terminal, plain lines when piped.
 - `lib.rs`: `run(Args) -> ExitCode` wires it together; `main.rs` only parses arguments.
 
-Outside `src/`, `action.yml` is a composite GitHub Action. It builds rotguard on the runner, runs
-`--apply --format markdown`, writes the report to the job summary and outputs the exit code and
-the path of the report. The site's workflow, shown in `docs/github-actions.md`, uses those
-outputs to open the pull request.
+Outside `src/`, `action.yml` is a composite GitHub Action. It restores a build cache, builds
+rotguard on the runner, runs `--apply --format markdown`, writes the report to the job summary,
+outputs the exit code and the path of the report, then saves the build cache. The site's
+workflow, shown in `docs/github-actions.md`, uses those outputs to open the pull request.
 
 ## Main flows
 
@@ -114,6 +114,8 @@ rotguard stores nothing between runs. It reads `rotguard.toml` and the content f
   links are listed only with `--strict` (`docs/design/bot-walls.md`, D1, D2).
 - The weekly run lives in CI, not in the binary: a composite action builds rotguard from its own
   source with no secret, and only exit 0 or 1 opens a PR (`docs/design/weekly-fix-pr.md`, D1, D6).
+- The action restores and saves its build cache in separate steps, the save inside the action, so
+  a week whose job fails on a hand fix still saves (`docs/design/build-cache.md`, D3).
 - The PR body is the markdown report, rendered by rotguard; the log and the job summary show the
   same report (`docs/design/readable-pr-body.md`, D1, D4).
 - A DNS failure is dead only when the answer says the name doesn't exist; any other lookup

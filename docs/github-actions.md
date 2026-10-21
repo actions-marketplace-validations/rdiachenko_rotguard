@@ -47,7 +47,7 @@ jobs:
     secrets: inherit
 ```
 
-The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
+The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. The action keeps its compiled dependencies in the site repo's Actions cache, so a week whose `Cargo.lock` and stable compiler haven't changed skips most of the build. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
 
 ## Two settings
 
