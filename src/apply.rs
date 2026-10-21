@@ -41,7 +41,7 @@ impl Error for ApplyError {
 /// is replaced atomically.
 ///
 /// Every file is tried. Other I/O errors from reading, writing or renaming a file are returned
-/// per file; that file is left as it was and its findings keep `Fix::Proposed`.
+/// per file; that file is left as it was and its proposed fixes become `Manual(WriteFailed)`.
 #[must_use]
 pub fn apply(site_dir: &Path, findings: &mut [Finding]) -> Vec<ApplyError> {
     let mut by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
@@ -56,7 +56,12 @@ pub fn apply(site_dir: &Path, findings: &mut [Finding]) -> Vec<ApplyError> {
     }
     let mut errors = Vec::new();
     for (file, indices) in by_file {
-        if let Err(source) = apply_file(&site_dir.join(&file), findings, indices) {
+        if let Err(source) = apply_file(&site_dir.join(&file), findings, indices.clone()) {
+            for index in indices {
+                if matches!(findings[index].fix, Fix::Proposed(_)) {
+                    findings[index].fix = Fix::Manual(ManualReason::WriteFailed);
+                }
+            }
             errors.push(ApplyError { file, source });
         }
     }
@@ -572,14 +577,32 @@ mod tests {
         assert_eq!(errors[0].file, Path::new("a.md"));
         assert_eq!(errors[0].to_string(), "a.md");
         assert!(errors[0].source().is_some());
-        assert_eq!(
-            findings[0].fix,
-            Fix::Proposed("https://a.test/new".to_string())
-        );
+        assert_eq!(findings[0].fix, Fix::Manual(ManualReason::WriteFailed));
         assert_eq!(
             findings[1].fix,
             Fix::Applied("https://a.test/new".to_string())
         );
+    }
+
+    #[test]
+    fn failed_write_marks_only_proposed_fixes() {
+        let text = format!("[a]({OLD_A})\n[b]({OLD_B})\n");
+        let dir = site(&text);
+        std::fs::write(dir.path().join("post.md.rotguard.tmp"), "x").unwrap();
+        let mut findings = vec![
+            finding(&text, OLD_A, "https://a.test/a)b", permanent(), Ctx::MdDest),
+            finding(&text, OLD_B, "https://web.test/snap", dead(), Ctx::MdDest),
+        ];
+        assert_eq!(apply(dir.path(), &mut findings).len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("post.md")).unwrap(),
+            text
+        );
+        assert_eq!(
+            findings[0].fix,
+            Fix::Manual(ManualReason::Unwritable(Unwritable::CannotQuote))
+        );
+        assert_eq!(findings[1].fix, Fix::Manual(ManualReason::WriteFailed));
     }
 
     #[cfg(unix)]

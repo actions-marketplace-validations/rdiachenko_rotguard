@@ -32,7 +32,6 @@ fn fix_at(report: &Value, file: &str, line: u64) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn apply_failed_s1_markdown_lists_the_unwritten_file_as_a_hand_fix() {
     let w = blocked_write_world().await;
     let (old, new) = (w.url("/old"), w.url("/new"));
@@ -69,7 +68,6 @@ async fn apply_failed_s1_markdown_lists_the_unwritten_file_as_a_hand_fix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn apply_failed_s2_text_says_write_failed() {
     let w = blocked_write_world().await;
 
@@ -93,7 +91,6 @@ async fn apply_failed_s2_text_says_write_failed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn apply_failed_s3_json_marks_the_fix_manual() {
     let w = blocked_write_world().await;
     let new = w.url("/new");

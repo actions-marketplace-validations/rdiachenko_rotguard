@@ -390,6 +390,7 @@ fn md_reason(reason: ManualReason) -> &'static str {
             "the new URL can't be written inside this link"
         }
         ManualReason::ChangedDuringRun => "the file changed while rotguard ran",
+        ManualReason::WriteFailed => "rotguard couldn't write the file; its error message says why",
     }
 }
 

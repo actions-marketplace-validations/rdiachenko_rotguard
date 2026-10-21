@@ -61,6 +61,8 @@ pub enum ManualReason {
     Unwritable(Unwritable),
     /// The file no longer holds the URL the run found.
     ChangedDuringRun,
+    /// The file could not be read, written or renamed.
+    WriteFailed,
 }
 
 impl fmt::Display for ManualReason {
@@ -69,6 +71,7 @@ impl fmt::Display for ManualReason {
             Self::Archive(reason) => reason.fmt(f),
             Self::Unwritable(reason) => reason.fmt(f),
             Self::ChangedDuringRun => f.write_str("changed during run"),
+            Self::WriteFailed => f.write_str("write failed"),
         }
     }
 }
@@ -537,6 +540,7 @@ mod tests {
                 "cannot quote",
             ),
             (ManualReason::ChangedDuringRun, "changed during run"),
+            (ManualReason::WriteFailed, "write failed"),
         ];
         for (reason, text) in table {
             assert_eq!(reason.to_string(), text);
