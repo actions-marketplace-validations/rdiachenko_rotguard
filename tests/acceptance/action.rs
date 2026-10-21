@@ -9,9 +9,6 @@ use serde_norway::Value;
 
 use crate::support::{Routes, World, redirect, status};
 
-const HEADING: &str =
-    "Fixes written by `rotguard --apply`. Entries marked `manual fix:` need a hand edit.";
-
 /// What one run of the action's run step produced.
 struct Step {
     code: i32,
@@ -157,13 +154,16 @@ async fn action_s1_fix_is_written_and_reported() {
         "{}",
         step.github_output
     );
-    let stdout = format!(
-        "post.md:1  PERMANENT REDIRECT 301 200  {old}\n    fix: {new}\n\
-         checked 1: ok 0, permanent 1, temporary 0, dead 0, suspect 0, unverifiable 0, blocked 0, ignored 0\n"
-    );
     assert_eq!(
         step.report_text(),
-        format!("{HEADING}\n\n```text\n{stdout}```\n")
+        format!(
+            "## Fixed: 1 link in 1 place\n\n\
+             | Page | Lines | Old link | New link | Why |\n\
+             |---|---|---|---|---|\n\
+             | post.md | 1 | <{old}> | <{new}> | moved permanently (301 200) |\n\n\
+             ## Needs a hand fix\n\nNothing.\n\n\
+             1 link checked: 0 ok, 1 moved permanently.\n"
+        )
     );
 }
 
@@ -184,13 +184,14 @@ async fn action_s2_hand_fix_exits_one_and_writes_nothing() {
         step.github_output
     );
     assert!(
-        step.stdout.contains("manual fix: no archived copy"),
+        step.stdout
+            .contains("no archived copy in the Wayback Machine"),
         "stdout:\n{}",
         step.stdout
     );
     let report = step.report_text();
     assert!(
-        report.contains("manual fix: no archived copy"),
+        report.contains("no archived copy in the Wayback Machine"),
         "report:\n{report}"
     );
     assert_eq!(w.site.snapshot(), before, "the site folder changed");

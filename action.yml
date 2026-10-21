@@ -19,20 +19,13 @@ runs:
       name: Run rotguard --apply
       shell: bash
       run: |
-        stdout_file=$(mktemp "$RUNNER_TEMP/rotguard-stdout.XXXXXX")
         report_file="$RUNNER_TEMP/rotguard-report.md"
         set +e
-        "$GITHUB_ACTION_PATH/target/release/rotguard" --apply > "$stdout_file"
+        "$GITHUB_ACTION_PATH/target/release/rotguard" --apply --format markdown > "$report_file"
         code=$?
         set -e
-        cat "$stdout_file"
-        {
-          echo 'Fixes written by `rotguard --apply`. Entries marked `manual fix:` need a hand edit.'
-          echo
-          echo '```text'
-          cat "$stdout_file"
-          echo '```'
-        } > "$report_file"
+        cat "$report_file"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat "$report_file" >> "$GITHUB_STEP_SUMMARY"; fi
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         echo "report=$report_file" >> "$GITHUB_OUTPUT"
         exit 0

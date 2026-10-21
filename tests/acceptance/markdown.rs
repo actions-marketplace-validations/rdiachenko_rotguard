@@ -305,7 +305,6 @@ async fn markdown_s7_strict_lists_a_bot_wall_in_the_folded_block() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S8"]
 async fn markdown_s8_run_step_writes_the_report_and_the_summary() {
     let w = one_line_world().await;
     let summary_dir = tempfile::tempdir().expect("temp dir");
@@ -338,7 +337,6 @@ async fn markdown_s8_run_step_writes_the_report_and_the_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S9"]
 async fn markdown_s9_run_step_needs_no_summary_file() {
     let w = one_line_world().await;
 
