@@ -2,6 +2,13 @@
 name = "rotguard"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Finds rotted outbound links in a markdown site and proposes or applies fixes"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rdiachenko/rotguard"
+readme = "README.md"
+keywords = ["link-checker", "broken-links", "markdown", "static-site", "wayback-machine"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 chrono = "0.4.45"

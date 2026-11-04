@@ -1,5 +1,8 @@
 # rotguard
 
+[![CI](https://github.com/rdiachenko/rotguard/actions/workflows/ci.yml/badge.svg)](https://github.com/rdiachenko/rotguard/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 Checks the outbound links of a markdown site for rot: dead links, redirects and soft-404s
 (pages that answer 200 but are really gone). It proposes a fix for each one: the new URL for a
 permanent redirect, or a Wayback Machine snapshot for a dead page. With `--apply` it writes those
@@ -7,10 +10,10 @@ fixes back into your files.
 
 ## Install
 
-Needs a recent stable Rust toolchain (the crate uses edition 2024).
+Needs Rust 1.88 or newer.
 
 ```sh
-cargo install --path .
+cargo install --locked --git https://github.com/rdiachenko/rotguard
 ```
 
 ## Use
@@ -98,3 +101,20 @@ link yourself:
 - `1`: a dead, permanent-redirect or suspect link is still unfixed. With `--strict`, temporary
   redirects, unverifiable and blocked links count too.
 - `2`: rotguard itself failed, for example because `rotguard.toml` is missing or invalid.
+
+## Learn more
+
+- [docs/config.md](docs/config.md): every `rotguard.toml` key.
+- [docs/github-actions.md](docs/github-actions.md): a weekly pull request with the fixes.
+- [docs/architecture.md](docs/architecture.md): how rotguard is built and why.
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release.
+
+## Contributing
+
+Bug reports and pull requests are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) covers the setup and
+the checks. Report security issues privately, as [SECURITY.md](SECURITY.md) describes.
+
+## License
+
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at
+your option.

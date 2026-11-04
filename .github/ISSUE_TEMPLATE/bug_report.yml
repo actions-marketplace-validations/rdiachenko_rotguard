@@ -1,0 +1,34 @@
+name: Bug report
+description: rotguard reported a link wrongly, wrote a bad fix, or failed to run.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: rotguard version
+      description: Output of `rotguard --version`, or the commit or tag of the action you use.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and config
+      description: The command you ran and your `rotguard.toml`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What rotguard printed
+      description: The report entries for the affected links, and stderr if rotguard failed. For a misclassified link, `--format json` shows the whole redirect chain.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: For a misclassified link, say what you see when you open it in a browser.
+    validations:
+      required: true

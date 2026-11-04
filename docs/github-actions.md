@@ -49,10 +49,9 @@ jobs:
 
 The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. The action keeps its compiled dependencies in the site repo's Actions cache, so a week whose `Cargo.lock` and stable compiler haven't changed skips most of the build. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
 
-## Two settings
+## One setting
 
-1. rotguard repo: Settings, Actions, General, Access, "Accessible from repositories owned by the user". Without it the site can't fetch the private action.
-2. Site repo: Settings, Actions, General, Workflow permissions, "Allow GitHub Actions to create and approve pull requests".
+In the site repo: Settings, Actions, General, Workflow permissions, "Allow GitHub Actions to create and approve pull requests". Without it the PR step fails.
 
 ## Outcomes
 
@@ -69,7 +68,7 @@ On exit 2 or higher, `--apply` may have written some files and not others, so no
 
 ## Notes
 
-- Merging the PR doesn't deploy. Run the deploy workflow as usual.
-- A PR opened with `GITHUB_TOKEN` may hold the site's e2e checks until someone with write access clicks "Approve workflows to run".
-- On a repo without `telegram-notify.yml`, drop the `notify` job. GitHub still emails the person who last edited the schedule when a scheduled run fails.
+- Merging the PR changes only the sources. If your site deploys on a separate workflow, run it as usual.
+- A PR opened with `GITHUB_TOKEN` may hold the site's required checks until someone with write access clicks "Approve workflows to run".
+- The `notify` job calls a reusable workflow, `telegram-notify.yml`, that sends a message when the run fails. Point it at your own alert workflow, or drop the job: GitHub still emails the person who last edited the schedule when a scheduled run fails.
 - Run it now with `gh workflow run rotguard.yml`.
