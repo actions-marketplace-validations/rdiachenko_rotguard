@@ -95,6 +95,15 @@ impl Fetch {
             "[package]\nname = \"rotguard\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         )
         .expect("write Cargo.toml");
+        let scripts_dir = action_dir.join("scripts");
+        fs::create_dir(&scripts_dir).expect("create scripts dir");
+        for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts"))
+            .expect("read repo scripts dir")
+        {
+            let path = entry.expect("read scripts entry").path();
+            let name = path.file_name().expect("script has a file name");
+            fs::copy(&path, scripts_dir.join(name)).expect("copy script");
+        }
 
         let asset = if arch == "ARM64" {
             ARM_ASSET
