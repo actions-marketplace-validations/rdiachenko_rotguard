@@ -6,14 +6,7 @@ set -euo pipefail
 notes_file=${1:?usage: release-verify.sh <notes file>}
 tag=${GITHUB_REF_NAME:?GITHUB_REF_NAME is not set}
 
-version=$(awk '
-    /^\[/ { in_package = ($0 == "[package]"); next }
-    in_package && /^version[[:space:]]*=/ {
-        split($0, parts, "\"")
-        print parts[2]
-        exit
-    }
-' Cargo.toml)
+version=$("$(dirname "$0")/cargo-version.sh" Cargo.toml)
 
 if [ "$tag" != "v$version" ]; then
     echo "release-verify: tag $tag does not match Cargo.toml version $version" >&2

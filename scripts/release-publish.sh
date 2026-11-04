@@ -34,11 +34,29 @@ fi
 
 gh release create "$tag" --draft --verify-tag --title "$tag" --notes-file "$notes"
 
-if ! { gh release upload "$tag" "${assets[@]}" "$dist/SHA256SUMS" &&
-    gh release edit "$tag" --draft=false; }; then
-    echo "release-publish: publishing $tag failed, deleting the draft" >&2
+if ! gh release upload "$tag" "${assets[@]}" "$dist/SHA256SUMS"; then
+    echo "release-publish: uploading to $tag failed, deleting the draft" >&2
     gh release delete "$tag" --yes
     exit 1
+fi
+
+if ! gh release edit "$tag" --draft=false; then
+    # The request may have landed with its response lost, so ask before deleting.
+    state=$(gh release view "$tag" --json isDraft --jq .isDraft) || state=unknown
+    case "$state" in
+        true)
+            echo "release-publish: publishing $tag failed, deleting the draft" >&2
+            gh release delete "$tag" --yes
+            exit 1
+            ;;
+        false)
+            echo "release-publish: gh release edit failed but $tag is published, moving v$major" >&2
+            ;;
+        *)
+            echo "release-publish: $tag may be published; nothing deleted, check gh release view $tag" >&2
+            exit 1
+            ;;
+    esac
 fi
 
 git tag -f "v$major" "$sha"

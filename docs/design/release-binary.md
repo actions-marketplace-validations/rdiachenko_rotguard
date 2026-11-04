@@ -327,7 +327,8 @@ publish [ubuntu-latest]  needs: build   permissions: contents: write
 The verify and publish logic lives in `scripts/release-verify.sh` and
 `scripts/release-publish.sh`, so the acceptance tests run them with stubs, the way
 `build_cache.rs` runs the key step. `scripts/release-verify.sh <notes file>` runs from the repo
-root: it reads the version from `Cargo.toml`'s `[package]` table, compares it with
+root: it reads the version with `scripts/cargo-version.sh Cargo.toml` (the `[package]` table; exit 1
+with a message when there is none, shared with the fetch step), compares it with
 `GITHUB_REF_NAME`, and writes the lines between `## [X.Y.Z]` and the next `## ` heading, trimmed
 of blank edges, to the notes file. Errors go to stderr with exit 1, and no notes file is written.
 `scripts/release-publish.sh <tag> <dist dir> <notes file>` expects `dist` to hold exactly the 2
@@ -340,8 +341,12 @@ of blank edges, to the notes file. Errors go to stderr with exit 1, and no notes
 5. `git tag -f v<major> "$GITHUB_SHA"` and `git push -f origin v<major>`, where `<major>` is
    the first number of the version. A lightweight tag needs no git identity.
 
-If step 3 or 4 fails, the script runs `gh release delete <tag> --yes` before exiting non-zero,
-so no draft is left behind.
+If step 3 (upload) fails, the script runs `gh release delete <tag> --yes` and exits 1; an upload
+cannot publish. If step 4 (edit) fails, the request may still have landed, so the script runs
+`gh release view <tag> --json isDraft --jq .isDraft`: `true` deletes the draft and exits 1;
+`false` means the release is published, so it prints a note to stderr and moves `v<major>` (R3);
+anything else prints `release-publish: <tag> may be published; nothing deleted, check gh release
+view <tag>` and exits 1 without deleting and without any `git` call.
 
 **Action fetch step** (`id: fetch`, `shell: bash`, first in `action.yml`; no `${{` in the
 script):
@@ -392,8 +397,9 @@ reads its certificates from the keychain, not these variables.
 
 **Invariants**:
 - Nothing is installed at `target/release/rotguard` before its checksum passes (fetch step).
-- `v<major>` moves only after `gh release edit --draft=false` succeeds, and a failed publish
-  leaves no draft (`release-publish.sh`).
+- `v<major>` moves only once the release is known to be published (`gh release edit --draft=false`
+  succeeded, or `gh release view` says it is not a draft), and a release is deleted only when it is
+  known to be a draft (`release-publish.sh`).
 - Only the publish job holds a token that can write (`release.yml`).
 
 **Budgets**: release about 8 minutes (cold `cargo test` unmeasured, about 3 min; 2 musl builds

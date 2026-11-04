@@ -27,10 +27,8 @@ runs:
           echo "mode=build" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        version=$(awk '
-          /^\[/ { in_package = ($0 == "[package]"); next }
-          in_package && /^version[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; exit }
-        ' "$GITHUB_ACTION_PATH/Cargo.toml") || { echo "::error::rotguard: cannot read the version from Cargo.toml"; exit 1; }
+        version=$("$GITHUB_ACTION_PATH/scripts/cargo-version.sh" "$GITHUB_ACTION_PATH/Cargo.toml") \
+          || { echo "::error::rotguard: cannot read the version from Cargo.toml"; exit 1; }
         asset="rotguard-$version-$target"
         base="https://github.com/rdiachenko/rotguard/releases/download/v$version"
         echo "Download rotguard $version (${target%%-*})"

@@ -24,7 +24,9 @@ adds.
 
 A failure before publishing leaves no release and `v<major>` where it was. Delete the tag with
 `git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`, fix the cause, and tag again. A published
-release is final (immutable releases): fix forward with the next patch version.
+release is final (immutable releases): fix forward with the next patch version. A run that fails
+after publishing leaves the release in place; move `v<major>` by hand with
+`git tag -f v<major> <sha> && git push -f origin v<major>`.
 
 The arm64 build assumes the `ubuntu-24.04-arm` image ships rustup. If that job fails, nothing
 publishes.
