@@ -79,7 +79,6 @@ const CHANGELOG: &str = "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-
                          - Older entry.\n";
 
 #[test]
-#[ignore = "pending: S1"]
 fn release_s1_verify_writes_the_changelog_section_as_notes() {
     let repo = Repo::new(CHANGELOG);
 
@@ -99,7 +98,6 @@ fn release_s1_verify_writes_the_changelog_section_as_notes() {
 }
 
 #[test]
-#[ignore = "pending: S2"]
 fn release_s2_verify_rejects_a_tag_that_differs_from_the_cargo_version() {
     let repo = Repo::new(CHANGELOG);
 
@@ -113,7 +111,6 @@ fn release_s2_verify_rejects_a_tag_that_differs_from_the_cargo_version() {
 }
 
 #[test]
-#[ignore = "pending: S3"]
 fn release_s3_verify_rejects_a_changelog_without_the_version_heading() {
     let repo = Repo::new("# Changelog\n\n## [Unreleased]\n\n- Something.\n");
 
