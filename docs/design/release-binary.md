@@ -201,7 +201,7 @@ and the site's notify job alerts. No PR step runs.
   `docs/github-actions.md` `@v0`, `docs/architecture.md`, `docs/config.md`, `CONTRIBUTING.md`.
 
 Size: ~390 (230 estimated × 1.7, median of the last 5 cross-repo design builds)
-Touches: `.github/**`, `action.yml` and `scripts/**` — the release workflow, its 2 scripts, and the
+Touches: `.github/**`, `action.yml`, `scripts/**` — the release workflow, its 2 scripts, and the
 action's fetch step.
 
 ### Open for you
