@@ -335,7 +335,6 @@ fn sha256(path: &Path) -> String {
 }
 
 #[test]
-#[ignore = "pending: S5"]
 fn release_s5_publish_creates_uploads_publishes_then_moves_the_major_tag() {
     let publish = Publish::new();
 
@@ -410,7 +409,6 @@ fn release_s5_publish_creates_uploads_publishes_then_moves_the_major_tag() {
 }
 
 #[test]
-#[ignore = "pending: S6"]
 fn release_s6_publish_stops_before_git_when_create_fails() {
     let publish = Publish::new();
 
@@ -429,7 +427,6 @@ fn release_s6_publish_stops_before_git_when_create_fails() {
 }
 
 #[test]
-#[ignore = "pending: S17"]
 fn release_s17_publish_deletes_the_draft_when_the_upload_fails() {
     let publish = Publish::new();
 
