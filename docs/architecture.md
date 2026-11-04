@@ -26,6 +26,8 @@ Context: rotguard
             ┌──────────────────┐ ┌──────────────────────────┐
             │ Linked websites  │ │ Wayback Machine CDX API  │
             └──────────────────┘ └──────────────────────────┘
+
+  Maintainer ──git push vX.Y.Z──► release.yml ──publishes──► GitHub Releases ──► action.yml
 ```
 
 - **Linked websites**: a timeout, TLS error, failed DNS lookup, 429 or 5xx makes a link
@@ -39,6 +41,8 @@ Context: rotguard
 - **GitHub Actions**: `action.yml` runs the binary on the site's runner, usually weekly, and the
   site's workflow (`docs/github-actions.md`) opens a pull request with the fixes. A failed
   build or a cache miss never changes what rotguard reports.
+- **GitHub Releases**: `release.yml` publishes static Linux binaries and `SHA256SUMS` on a
+  `vX.Y.Z` tag, and the action downloads them. A published release is immutable.
 
 ## Components
 
@@ -85,19 +89,26 @@ and YAML front matter.
 time. `report.rs` renders findings and the summary in 4 formats and has no say in the exit
 code. `progress.rs` writes progress to stderr only, so stdout stays a clean report.
 
-Outside `src/`, `action.yml` is a composite GitHub Action with 5 steps:
-1. Pick a cache key from the OS, the stable `rustc` version and `Cargo.lock`.
-2. Restore the build cache.
-3. Build rotguard.
-4. Run `--apply --format markdown`, always exiting 0 with the real code in the `exit-code`
+Outside `src/`, `action.yml` is a composite GitHub Action with 6 steps:
+1. Fetch: when the ref is a release tag (`v0`, `v0.1.0`) on Linux X64 or ARM64, download the
+   release binary, check its sha256 and install it where the build would put it, and skip
+   steps 2, 3, 4 and 6. Any other ref or platform sets `mode=build` and those steps run.
+2. Pick a cache key from the OS, the stable `rustc` version and `Cargo.lock`.
+3. Restore the build cache.
+4. Build rotguard.
+5. Run `--apply --format markdown`, always exiting 0 with the real code in the `exit-code`
    output.
-5. Save the cache on a miss.
+6. Save the cache on a miss.
+
+`.github/workflows/release.yml` runs on a `vX.Y.Z` tag in 3 jobs: verify the tag against
+`Cargo.toml` and `CHANGELOG.md`, build both musl targets, then publish the release and move the
+`v<major>` tag (`scripts/release-verify.sh`, `scripts/release-publish.sh`).
 
 ## Main flows
 
 **Check** (every run):
 1. Load the config; read every file matching `content`, sorted by path; extract links. A config,
-   glob or read error exits 2.
+   glob or read error exits 2, as does a missing system CA bundle (reported before any request).
 2. Drop internal links (host of `site_url`) and `ignore` matches; strip fragments; dedupe.
 3. `check_all` the distinct URLs until `deadline_s`. A URL still running then is
    `UNVERIFIABLE` (`deadline`).
@@ -127,7 +138,8 @@ its fixes as `manual fix: write failed` and exits 2.
 **Weekly fix PR** (`docs/github-actions.md`): the site's workflow runs the action. On exit 0
 or 1 it opens or updates a PR whose body is the markdown report; on 1 or anything higher the job
 fails afterwards. On exit 2 or higher no PR opens, because `--apply` may have written some files
-and not others.
+and not others. On a tag ref (`@v0`) the action downloads the release binary instead of
+building it; a failed download fails the job.
 
 ## Data
 
@@ -135,9 +147,12 @@ The binary keeps nothing between runs: no history and no link cache. It reads `r
 and the content files, and with `--apply` replaces content files through a temp file in the
 same directory. Its output is stdout, stderr and the exit code.
 
+A release holds 3 assets: `rotguard-<X.Y.Z>-x86_64-unknown-linux-musl`,
+`rotguard-<X.Y.Z>-aarch64-unknown-linux-musl` and `SHA256SUMS`.
+
 The action writes the report to `$RUNNER_TEMP/rotguard-report.md` and the job summary, and keeps
 the compiled build in the site repo's Actions cache under
-`rotguard-<os>-<rustc>-<Cargo.lock hash>`.
+`rotguard-<os>-<rustc>-<Cargo.lock hash>`. A run from a release tag uses no cache.
 
 ## Hard parts
 
@@ -154,6 +169,12 @@ the compiled build in the site repo's Actions cache under
   one slow host can't starve the others, and every wait is bounded by the deadline, after which
   `run` drops the runtime without waiting for hung requests. Tests in `src/check.rs` and
   `src/archive.rs` check spacing, 1 request per host and hanging servers.
+- **The action's ref detection.** The fetch step reads the ref as everything after
+  `_actions/<owner>/<repo>/` in `$GITHUB_ACTION_PATH`. A wrong reading picks the wrong mode: a
+  branch gets a release download that 404s, or a tag builds slowly. A non-matching ref or a
+  platform without a binary builds from source, so a miss is slower, never wrong. A branch
+  named exactly like a tag counts as a tag.
+  `tests/acceptance/fetch.rs` pins the cases.
 - **Soft-404 judgement.** It decides between `Ok`, `Suspect` and `Blocked` from a shared probe
   cache, so a change to a probe key or to the root-redirect rule shifts verdicts across links.
   `tests/acceptance/soft404.rs`, `blocked.rs`, `directory_probe.rs` and `root_redirect.rs`
@@ -185,10 +206,18 @@ the compiled build in the site repo's Actions cache under
 - A redirect to the site root counts only where the link ends up or where its fix would point,
   so a chain that goes on to a real page keeps its own soft-404 checks
   (`docs/design/root-redirect.md`, D1).
-- The weekly run lives in CI, not in the binary: a composite action builds rotguard from its own
-  source with no secret, and only exit 0 or 1 opens a PR (`docs/design/weekly-fix-pr.md`, D1, D6).
+- The weekly run lives in CI, not in the binary: a composite action runs rotguard with no secret,
+  and only exit 0 or 1 opens a PR (`docs/design/weekly-fix-pr.md`, D1, D6). On non-tag refs
+  (`@main`, a branch, a SHA) the action builds rotguard from its own source.
 - The action restores and saves its build cache in separate steps, the save inside the action, so
   a week whose job fails on a hand fix still saves (`docs/design/build-cache.md`, D3).
+- A tag ref downloads the release binary and any other ref builds from source, so an action
+  change can run on a real site before it is released
+  (`docs/design/release-binary.md`, D1).
+- The action reads the ref from its folder path, not from `github.action_ref`, which holds the
+  caller's ref inside a nested composite action (`docs/design/release-binary.md`, D2).
+- The release workflow publishes only after every check and moves `v0` last; a published tag is
+  never rewritten (`docs/design/release-binary.md`, D4).
 - The PR body is the markdown report, rendered by rotguard; the log and the job summary show the
   same report (`docs/design/readable-pr-body.md`, D1, D4).
 

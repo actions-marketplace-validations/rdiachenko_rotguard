@@ -10,7 +10,7 @@ fn version_prints_name_and_version() {
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
-        "rotguard 0.1.0"
+        concat!("rotguard ", env!("CARGO_PKG_VERSION"))
     );
 }
 

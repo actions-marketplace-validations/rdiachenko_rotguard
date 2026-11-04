@@ -16,6 +16,9 @@ Needs Rust 1.88 or newer.
 cargo install --locked --git https://github.com/rdiachenko/rotguard
 ```
 
+Or download the binary for Linux (x86_64 or arm64) from the
+[releases page](https://github.com/rdiachenko/rotguard/releases) and put it on your `PATH`.
+
 ## Use
 
 Put a `rotguard.toml` in your site's root (see [Configure](#configure)), then:
@@ -38,7 +41,7 @@ holds the counts of the summary line.
 Run it without `--apply` first, read the report, then run it again with `--apply`.
 
 To run it every week and get the fixes as a pull request, see
-[docs/github-actions.md](docs/github-actions.md).
+[docs/github-actions.md](docs/github-actions.md); pin the action to `@v0`.
 
 ## Configure
 

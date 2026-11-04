@@ -42,6 +42,8 @@ The code keeps 3 rules, checked by the commands in `.whittle/gates.toml`:
   other host in a test ends in `.test`, `.invalid` or `.example`.
 - No private data in tracked files.
 
+Maintainers: `CLAUDE.md` lists the steps to cut a release.
+
 ## Find your way around
 
 [docs/architecture.md](docs/architecture.md) maps the modules and the main flows. Unit tests sit

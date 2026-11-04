@@ -294,7 +294,7 @@ fn action_s5_documented_workflow_has_the_agreed_shape() {
         .expect("a step with id: rotguard");
     assert_eq!(
         steps[rotguard_at]["uses"].as_str(),
-        Some("rdiachenko/rotguard@main")
+        Some("rdiachenko/rotguard@v0")
     );
 
     let pr_at = steps

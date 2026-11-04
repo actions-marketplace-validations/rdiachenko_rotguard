@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: rotguard
-        uses: rdiachenko/rotguard@main
+        uses: rdiachenko/rotguard@v0
       - if: steps.rotguard.outputs.exit-code == '0' || steps.rotguard.outputs.exit-code == '1'
         uses: peter-evans/create-pull-request@v8
         with:
@@ -47,7 +47,7 @@ jobs:
     secrets: inherit
 ```
 
-The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. The action keeps its compiled dependencies in the site repo's Actions cache, so a week whose `Cargo.lock` and stable compiler haven't changed skips most of the build. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
+The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. A site on `@v0` (or `@v0.1.0`) on a Linux runner downloads a prebuilt binary in seconds. `@main` or a branch builds rotguard from source and keeps its compiled dependencies in the site repo's Actions cache; use it to try an unreleased change. A breaking release starts a new major tag, so `@v0` never jumps to 1.x. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
 
 ## One setting
 

@@ -28,7 +28,7 @@ rotguard reads `rotguard.toml` from the site directory (the directory you run it
 ### `user_agent`
 
 - Type: string.
-- Default: `"rotguard/<version>"`, which follows the installed version (`rotguard/0.1.0` now).
+- Default: `"rotguard/<version>"`, which follows the installed version.
 - Valid values: any string that can be sent as an HTTP header value (no control characters or newlines).
 - Effect: sent as the `User-Agent` of link checks, soft-404 probes and archive queries.
 - Error: an invalid value prints `` invalid rotguard.toml: `user_agent` ("<value>") is not a valid HTTP header value ``.
@@ -111,7 +111,7 @@ rotguard reads `rotguard.toml` from the site directory (the directory you run it
 site_url = "https://example.com"
 content = ["content/**/*.md"]
 date_key = "date"
-user_agent = "rotguard/0.1.0"
+user_agent = "rotguard/<version>"
 ignore = []
 not_found_phrases = ["not found", "404", "page does not exist", "page doesn't exist"]
 archive_url = "https://web.archive.org"
