@@ -6,7 +6,6 @@ use std::process::Command;
 use crate::support::World;
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S14"]
 async fn ca_certs_s14_missing_ca_bundle_exits_2_without_a_panic() {
     let w = World::new().await;
     w.site.write("p.md", &format!("[x]({})\n", w.url("/x")));

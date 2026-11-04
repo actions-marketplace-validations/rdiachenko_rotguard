@@ -74,19 +74,21 @@ fn parsing_changes_target(original: &str) -> bool {
     })
 }
 
+/// The archive's client: default redirects, the config's timeout and User-Agent.
+///
+/// # Errors
+/// If the TLS backend cannot load the system's CA certificates.
+pub fn http_client(cfg: &Config) -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .timeout(cfg.timeout)
+        .user_agent(cfg.user_agent.as_str())
+        .build()
+}
+
 impl Archive {
-    /// Builds the client once from the config's User-Agent and timeout.
-    ///
-    /// # Panics
-    /// If the TLS backend cannot initialise, which is a broken build or platform. A
-    /// `user_agent` from a parsed `Config` is already checked as a valid header value.
+    /// An archive that sends its requests through `client`, built by [`http_client`].
     #[must_use]
-    pub fn new(cfg: &Config) -> Archive {
-        let client = Client::builder()
-            .timeout(cfg.timeout)
-            .user_agent(cfg.user_agent.as_str())
-            .build()
-            .expect("user_agent is validated by config::parse; the TLS backend is built in");
+    pub fn new(client: Client, cfg: &Config) -> Archive {
         let base = cfg.archive_url.as_str().trim_end_matches('/').to_owned();
         let endpoint = Url::parse(&format!("{base}/cdx/search/cdx"))
             .expect("a parsed archive_url plus a fixed path is a valid URL");
@@ -309,7 +311,8 @@ mod tests {
              archive_url = \"{}\"\n{extra}",
             server.uri()
         );
-        Archive::new(&config::parse(&text).expect("test config is valid"))
+        let cfg = config::parse(&text).expect("test config is valid");
+        Archive::new(http_client(&cfg).expect("the test client builds"), &cfg)
     }
 
     fn target() -> Url {

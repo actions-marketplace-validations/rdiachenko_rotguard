@@ -79,6 +79,19 @@ impl fmt::Display for FetchError {
 
 impl Error for FetchError {}
 
+/// The checker's client: redirects off (the fetcher follows them by hand), the config's
+/// timeout and User-Agent.
+///
+/// # Errors
+/// If the TLS backend cannot load the system's CA certificates.
+pub fn http_client(cfg: &Config) -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .redirect(Policy::none())
+        .timeout(cfg.timeout)
+        .user_agent(cfg.user_agent.as_str())
+        .build()
+}
+
 /// Fetches URLs through per-host gates.
 #[derive(Debug)]
 pub struct Fetcher {
@@ -89,19 +102,9 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    /// Builds the client once from the config's User-Agent and timeout.
-    ///
-    /// # Panics
-    /// If the TLS backend cannot initialise, which is a broken build or platform. A
-    /// `user_agent` from a parsed `Config` is already checked as a valid header value.
+    /// A fetcher that sends its requests through `client`, built by [`http_client`].
     #[must_use]
-    pub fn new(cfg: &Config) -> Fetcher {
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .timeout(cfg.timeout)
-            .user_agent(cfg.user_agent.as_str())
-            .build()
-            .expect("user_agent is validated by config::parse; the TLS backend is built in");
+    pub fn new(client: Client, cfg: &Config) -> Fetcher {
         Fetcher {
             client,
             interval: cfg.host_interval,
@@ -399,11 +402,12 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 /// the deadline counts.
 pub async fn check_all(
     urls: Vec<Url>,
+    client: Client,
     cfg: &Config,
     deadline: Instant,
     mut on_done: impl FnMut(usize),
 ) -> HashMap<Url, Verdict> {
-    let fetcher = Arc::new(Fetcher::new(cfg));
+    let fetcher = Arc::new(Fetcher::new(client, cfg));
     let probes = Arc::new(Probes::default());
     let recheck_delay = cfg.recheck_delay;
     let phrases: Arc<[String]> = cfg.not_found_phrases.as_slice().into();
@@ -774,7 +778,8 @@ mod tests {
         let text = format!(
             "site_url = \"https://site.example/\"\nuser_agent = \"rotguard-unit/1.0\"\n{extra}"
         );
-        Fetcher::new(&config::parse(&text).expect("test config is valid"))
+        let cfg = config::parse(&text).expect("test config is valid");
+        Fetcher::new(http_client(&cfg).expect("the test client builds"), &cfg)
     }
 
     fn url(server: &MockServer, p: &str) -> Url {
@@ -1428,6 +1433,17 @@ mod tests {
         }
     }
 
+    /// `check_all` with a client built from `cfg`.
+    async fn check_all_with_test_client(
+        urls: Vec<Url>,
+        cfg: &Config,
+        deadline: Instant,
+        on_done: impl FnMut(usize),
+    ) -> HashMap<Url, Verdict> {
+        let client = http_client(cfg).expect("the test client builds");
+        check_all(urls, client, cfg, deadline, on_done).await
+    }
+
     fn config_for(extra: &str) -> Config {
         config::parse(&format!(
             "site_url = \"https://site.example/\"\nuser_agent = \"rotguard-unit/1.0\"\nhost_interval_ms = 0\n{extra}"
@@ -1489,7 +1505,7 @@ mod tests {
             .mount(&server)
             .await;
         let u = url(&server, "/x");
-        let got = check_all(vec![u.clone()], &config_for(""), far(), |_| {}).await;
+        let got = check_all_with_test_client(vec![u.clone()], &config_for(""), far(), |_| {}).await;
         assert_eq!(unverifiable_reason(&got, &u), "503");
         assert_eq!(gets(&server).await, 3);
     }
@@ -1502,7 +1518,7 @@ mod tests {
             .mount(&server)
             .await;
         let u = url(&server, "/x");
-        let got = check_all(
+        let got = check_all_with_test_client(
             vec![u.clone()],
             &config_for("timeout_ms = 100"),
             far(),
@@ -1521,7 +1537,8 @@ mod tests {
         ])
         .await;
         let u = url(&server, "/x");
-        let got = check_all(vec![u.clone()], &config_for(NO_PROBE), far(), |_| {}).await;
+        let got =
+            check_all_with_test_client(vec![u.clone()], &config_for(NO_PROBE), far(), |_| {}).await;
         assert!(matches!(got[&u], Verdict::Ok { .. }), "{:?}", got[&u]);
         let times = times.lock().unwrap();
         assert_eq!(times.len(), 2);
@@ -1536,7 +1553,7 @@ mod tests {
             .mount(&server)
             .await;
         let u = url(&server, "/x");
-        let got = check_all(vec![u.clone()], &config_for(""), far(), |_| {}).await;
+        let got = check_all_with_test_client(vec![u.clone()], &config_for(""), far(), |_| {}).await;
         assert_eq!(unverifiable_reason(&got, &u), "429");
         assert_eq!(gets(&server).await, 2);
     }
@@ -1546,7 +1563,7 @@ mod tests {
         let (server, times) =
             scripted(vec![ResponseTemplate::new(404), ResponseTemplate::new(200)]).await;
         let u = url(&server, "/x");
-        let got = check_all(
+        let got = check_all_with_test_client(
             vec![u.clone()],
             &config_for(&format!("recheck_delay_ms = 50\n{NO_PROBE}")),
             far(),
@@ -1561,7 +1578,7 @@ mod tests {
     async fn a_404_twice_is_dead_after_the_recheck_delay() {
         let (server, times) = scripted(vec![ResponseTemplate::new(404)]).await;
         let u = url(&server, "/x");
-        let got = check_all(
+        let got = check_all_with_test_client(
             vec![u.clone()],
             &config_for("recheck_delay_ms = 300"),
             far(),
@@ -1588,7 +1605,7 @@ mod tests {
             .await;
         let u = url(&server, "/x");
         let started = Instant::now();
-        let got = check_all(
+        let got = check_all_with_test_client(
             vec![u.clone()],
             &config_for("timeout_ms = 30000"),
             started + Duration::from_secs(1),
@@ -1611,7 +1628,9 @@ mod tests {
             .mount(&server)
             .await;
         let (a, b) = (url(&server, "/a"), url(&server, "/b"));
-        let got = check_all(vec![a.clone(), b.clone()], &config_for(""), far(), |_| {}).await;
+        let got =
+            check_all_with_test_client(vec![a.clone(), b.clone()], &config_for(""), far(), |_| {})
+                .await;
         assert_eq!(got.len(), 2);
         assert!(matches!(got[&a], Verdict::Ok { .. }));
         assert_eq!(unverifiable_reason(&got, &b), "403");
@@ -1627,7 +1646,9 @@ mod tests {
                 .await;
             mount(&server, "^/w/.+", ResponseTemplate::new(sibling)).await;
             let page = url(&server, "/w/page");
-            let got = check_all(vec![page.clone()], &config_for(""), far(), |_| {}).await;
+            let got =
+                check_all_with_test_client(vec![page.clone()], &config_for(""), far(), |_| {})
+                    .await;
             if blocked {
                 assert_eq!(
                     got[&page],
@@ -1653,7 +1674,8 @@ mod tests {
             .await;
         let urls: Vec<Url> = ["/a", "/b", "/c"].iter().map(|p| url(&server, p)).collect();
         let mut counts = Vec::new();
-        check_all(urls, &config_for(NO_PROBE), far(), |done| counts.push(done)).await;
+        check_all_with_test_client(urls, &config_for(NO_PROBE), far(), |done| counts.push(done))
+            .await;
         assert_eq!(counts, [1, 2, 3]);
     }
 
@@ -1752,7 +1774,9 @@ mod tests {
         let server = MockServer::start().await;
         mount(&server, "^/docs/(a|b)$", page("T", "some page text here")).await;
         let (a, b) = (url(&server, "/docs/a"), url(&server, "/docs/b"));
-        let got = check_all(vec![a.clone(), b.clone()], &config_for(""), far(), |_| {}).await;
+        let got =
+            check_all_with_test_client(vec![a.clone(), b.clone()], &config_for(""), far(), |_| {})
+                .await;
         assert!(matches!(got[&a], Verdict::Ok { .. }), "{:?}", got[&a]);
         assert!(matches!(got[&b], Verdict::Ok { .. }), "{:?}", got[&b]);
         let probes: Vec<_> = server
@@ -1777,7 +1801,8 @@ mod tests {
         let server = MockServer::start().await;
         mount(&server, "^/docs/real/$", page("T", "some page text here")).await;
         let target = url(&server, "/docs/real/");
-        let got = check_all(vec![target.clone()], &config_for(""), far(), |_| {}).await;
+        let got =
+            check_all_with_test_client(vec![target.clone()], &config_for(""), far(), |_| {}).await;
         assert!(
             matches!(got[&target], Verdict::Ok { .. }),
             "{:?}",
@@ -1948,7 +1973,9 @@ mod tests {
                 mount(&server, route, response).await;
             }
             let u = url(&server, target);
-            let got = check_all(vec![u.clone()], &config_for(extra), far(), |_| {}).await;
+            let got =
+                check_all_with_test_client(vec![u.clone()], &config_for(extra), far(), |_| {})
+                    .await;
             match reason {
                 Some(reason) => assert_eq!(reason_of(&got[&u]), reason, "{name}"),
                 None => assert!(

@@ -135,6 +135,18 @@ pub fn run(args: Args) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let clients = check::http_client(&cfg)
+        .and_then(|checker| archive::http_client(&cfg).map(|archive| Clients { checker, archive }));
+    let clients = match clients {
+        Ok(clients) => clients,
+        Err(err) => {
+            eprintln!(
+                "rotguard: cannot load the system's CA certificates: {}",
+                chain(&err)
+            );
+            return ExitCode::from(2);
+        }
+    };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(err) => {
@@ -143,7 +155,8 @@ pub fn run(args: Args) -> ExitCode {
         }
     };
     let mut progress = Progress::stderr(args.quiet);
-    let (mut findings, summary) = runtime.block_on(check_pages(&pages, &cfg, &mut progress));
+    let (mut findings, summary) =
+        runtime.block_on(check_pages(&pages, &cfg, clients, &mut progress));
     // Hung requests must not hold the process past the deadline.
     runtime.shutdown_background();
     if !args.strict {
@@ -236,9 +249,16 @@ struct Occurrence<'a> {
     url: Url,
 }
 
+/// The 2 HTTP clients of a run: the checker's and the archive's.
+struct Clients {
+    checker: reqwest::Client,
+    archive: reqwest::Client,
+}
+
 async fn check_pages(
     pages: &[(PathBuf, Page)],
     cfg: &Config,
+    clients: Clients,
     progress: &mut Progress<io::Stderr>,
 ) -> (Vec<Finding>, Summary) {
     let site_host = cfg.site_url.host_str();
@@ -277,7 +297,7 @@ async fn check_pages(
         .collect::<HashSet<_>>()
         .len();
     progress.start(Phase::Check { hosts }, distinct.len());
-    let verdicts = check::check_all(distinct.clone(), cfg, deadline, |done| {
+    let verdicts = check::check_all(distinct.clone(), clients.checker, cfg, deadline, |done| {
         progress.tick(done);
     })
     .await;
@@ -297,11 +317,14 @@ async fn check_pages(
     let n = lookups.len();
     let snapshots = if n > 0 {
         progress.start(Phase::Archive, n);
-        let snapshots = look_up_snapshots(lookups, cfg, deadline, |done| progress.tick(done)).await;
+        let snapshots = look_up_snapshots(lookups, clients.archive, cfg, deadline, |done| {
+            progress.tick(done)
+        })
+        .await;
         progress.finish();
         snapshots
     } else {
-        look_up_snapshots(lookups, cfg, deadline, |_| {}).await
+        look_up_snapshots(lookups, clients.archive, cfg, deadline, |_| {}).await
     };
 
     let mut findings = Vec::new();
@@ -371,11 +394,12 @@ fn fragment_of(link: &str) -> Option<&str> {
 /// Looks up all snapshots concurrently; the archive's own gate spaces the requests.
 async fn look_up_snapshots(
     lookups: HashSet<(Url, NaiveDate)>,
+    client: reqwest::Client,
     cfg: &Config,
     deadline: Instant,
     mut on_done: impl FnMut(usize),
 ) -> HashMap<(Url, NaiveDate), Result<Url, NoFix>> {
-    let archive = Arc::new(Archive::new(cfg));
+    let archive = Arc::new(Archive::new(client, cfg));
     let mut tasks = JoinSet::new();
     for (url, date) in lookups {
         let archive = Arc::clone(&archive);
