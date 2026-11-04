@@ -151,7 +151,6 @@ fn job_runs(job: &Value) -> Vec<&str> {
 }
 
 #[test]
-#[ignore = "pending: S4"]
 fn release_s4_workflow_runs_on_tags_and_only_publish_can_write() {
     let workflow = workflow();
 
