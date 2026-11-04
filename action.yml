@@ -10,7 +10,43 @@ outputs:
 runs:
   using: composite
   steps:
+    - id: fetch
+      name: Download the release binary
+      shell: bash
+      run: |
+        ref="${GITHUB_ACTION_PATH#*/_actions/*/*/}"
+        ref_pattern='^v[0-9]+(\.[0-9]+\.[0-9]+)?$'
+        target=''
+        if [[ $RUNNER_OS == Linux && $ref =~ $ref_pattern ]]; then
+          case "$RUNNER_ARCH" in
+            X64) target=x86_64-unknown-linux-musl ;;
+            ARM64) target=aarch64-unknown-linux-musl ;;
+          esac
+        fi
+        if [ -z "$target" ]; then
+          echo "mode=build" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        version=$(awk '
+          /^\[/ { in_package = ($0 == "[package]"); next }
+          in_package && /^version[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; exit }
+        ' "$GITHUB_ACTION_PATH/Cargo.toml") || { echo "::error::rotguard: cannot read the version from Cargo.toml"; exit 1; }
+        asset="rotguard-$version-$target"
+        base="https://github.com/rdiachenko/rotguard/releases/download/v$version"
+        echo "Download rotguard $version (${target%%-*})"
+        curl --fail --location --retry 3 --silent --show-error --output "$RUNNER_TEMP/$asset" "$base/$asset" \
+          || { echo "::error::rotguard: cannot download the release binary ($base/$asset)"; exit 1; }
+        curl --fail --location --retry 3 --silent --show-error --output "$RUNNER_TEMP/SHA256SUMS" "$base/SHA256SUMS" \
+          || { echo "::error::rotguard: cannot download the checksums ($base/SHA256SUMS)"; exit 1; }
+        (cd "$RUNNER_TEMP" && grep -F " $asset" SHA256SUMS | sha256sum -c -) \
+          || { echo "::error::rotguard: checksum mismatch for $asset"; exit 1; }
+        mkdir -p "$GITHUB_ACTION_PATH/target/release" \
+          || { echo "::error::rotguard: cannot create target/release ($asset)"; exit 1; }
+        install -m 755 "$RUNNER_TEMP/$asset" "$GITHUB_ACTION_PATH/target/release/rotguard" \
+          || { echo "::error::rotguard: cannot install $asset"; exit 1; }
+        echo "mode=release" >> "$GITHUB_OUTPUT"
     - id: key
+      if: steps.fetch.outputs.mode == 'build'
       name: Pick the build cache key
       shell: bash
       run: |
@@ -22,6 +58,7 @@ runs:
         # The action's files carry their commit time, which can be older than a restored build.
         if [ -d "$GITHUB_ACTION_PATH/src" ]; then find "$GITHUB_ACTION_PATH/src" -type f -exec touch {} +; fi
     - id: cache
+      if: steps.fetch.outputs.mode == 'build'
       name: Restore the build cache
       uses: actions/cache/restore@v6
       with:
@@ -33,6 +70,7 @@ runs:
         key: ${{ steps.key.outputs.key }}
         restore-keys: rotguard-${{ runner.os }}-${{ steps.key.outputs.rustc }}-
     - name: Build rotguard
+      if: steps.fetch.outputs.mode == 'build'
       shell: bash
       run: |
         rustup toolchain install stable --profile minimal
@@ -52,7 +90,7 @@ runs:
         echo "report=$report_file" >> "$GITHUB_OUTPUT"
         exit 0
     - name: Save the build cache
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.fetch.outputs.mode == 'build' && steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: |

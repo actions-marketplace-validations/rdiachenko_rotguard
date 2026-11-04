@@ -224,7 +224,6 @@ impl Fetch {
 }
 
 #[test]
-#[ignore = "pending: S7"]
 fn fetch_s7_tag_ref_on_x64_installs_the_verified_binary() {
     let fetch = Fetch::run("v0", "Linux", "X64", Serve::Good);
 
@@ -248,7 +247,6 @@ fn fetch_s7_tag_ref_on_x64_installs_the_verified_binary() {
 }
 
 #[test]
-#[ignore = "pending: S8"]
 fn fetch_s8_arm_runner_downloads_the_aarch64_asset() {
     let fetch = Fetch::run("v0.1.0", "Linux", "ARM64", Serve::Good);
 
@@ -263,7 +261,6 @@ fn fetch_s8_arm_runner_downloads_the_aarch64_asset() {
 }
 
 #[test]
-#[ignore = "pending: S9"]
 fn fetch_s9_action_yml_skips_the_build_steps_in_release_mode() {
     let action = action();
     let steps = action["runs"]["steps"]
@@ -313,7 +310,6 @@ fn fetch_s9_action_yml_skips_the_build_steps_in_release_mode() {
 }
 
 #[test]
-#[ignore = "pending: S10"]
 fn fetch_s10_checksum_mismatch_fails_and_installs_nothing() {
     let fetch = Fetch::run("v0", "Linux", "X64", Serve::WrongSum);
 
@@ -323,7 +319,6 @@ fn fetch_s10_checksum_mismatch_fails_and_installs_nothing() {
 }
 
 #[test]
-#[ignore = "pending: S11"]
 fn fetch_s11_download_failure_names_the_url_and_installs_nothing() {
     let fetch = Fetch::run("v0", "Linux", "X64", Serve::NotFound);
 
@@ -346,25 +341,21 @@ fn assert_builds_from_source(action_ref: &str, os: &str, arch: &str) {
 }
 
 #[test]
-#[ignore = "pending: S12"]
 fn fetch_s12_main_ref_builds_from_source() {
     assert_builds_from_source("main", "Linux", "X64");
 }
 
 #[test]
-#[ignore = "pending: S13"]
 fn fetch_s13_macos_runner_builds_from_source() {
     assert_builds_from_source("v0", "macOS", "ARM64");
 }
 
 #[test]
-#[ignore = "pending: S16"]
 fn fetch_s16_branch_named_like_a_tag_prefix_builds_from_source() {
     assert_builds_from_source("v0-fix", "Linux", "X64");
 }
 
 #[test]
-#[ignore = "pending: S18"]
 fn fetch_s18_slashed_ref_builds_from_source() {
     assert_builds_from_source("release/v0.2.0", "Linux", "X64");
 }

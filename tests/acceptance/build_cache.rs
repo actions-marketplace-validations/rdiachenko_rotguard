@@ -64,18 +64,18 @@ fn path_lines(step: &Value) -> Vec<&str> {
 fn build_cache_s1_action_yml_restores_before_the_build_and_saves_after_the_run() {
     let action = action();
     let steps = steps(&action);
-    assert_eq!(steps.len(), 5, "action.yml has five steps");
+    assert_eq!(steps.len(), 6, "action.yml has six steps");
 
-    let key = &steps[0];
-    assert_eq!(key["id"].as_str(), Some("key"), "step 0 id");
-    assert_eq!(key["shell"].as_str(), Some("bash"), "step 0 shell");
+    let key = &steps[1];
+    assert_eq!(key["id"].as_str(), Some("key"), "step 1 id");
+    assert_eq!(key["shell"].as_str(), Some("bash"), "step 1 shell");
 
-    let cache = &steps[1];
-    assert_eq!(cache["id"].as_str(), Some("cache"), "step 1 id");
+    let cache = &steps[2];
+    assert_eq!(cache["id"].as_str(), Some("cache"), "step 2 id");
     assert_eq!(
         cache["uses"].as_str(),
         Some("actions/cache/restore@v6"),
-        "step 1 uses"
+        "step 2 uses"
     );
     assert_eq!(
         cache["with"]["key"].as_str(),
@@ -90,20 +90,20 @@ fn build_cache_s1_action_yml_restores_before_the_build_and_saves_after_the_run()
     assert_eq!(path_lines(cache), PATHS, "restore paths");
 
     assert!(
-        run_text(&steps[2]).contains("cargo +stable build"),
-        "step 2 is the build step"
+        run_text(&steps[3]).contains("cargo +stable build"),
+        "step 3 is the build step"
     );
-    assert_eq!(steps[3]["id"].as_str(), Some("run"), "step 3 id");
+    assert_eq!(steps[4]["id"].as_str(), Some("run"), "step 4 id");
 
-    let save = &steps[4];
+    let save = &steps[5];
     assert_eq!(
         save["uses"].as_str(),
         Some("actions/cache/save@v6"),
-        "step 4 uses"
+        "step 5 uses"
     );
     assert_eq!(
         save["if"].as_str(),
-        Some("steps.cache.outputs.cache-hit != 'true'"),
+        Some("steps.fetch.outputs.mode == 'build' && steps.cache.outputs.cache-hit != 'true'"),
         "save condition"
     );
     assert_eq!(
