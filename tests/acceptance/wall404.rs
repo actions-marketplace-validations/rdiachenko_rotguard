@@ -291,7 +291,6 @@ async fn wall404_s15_soft404_off_still_checks_the_root() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S16"]
 async fn wall404_s16_no_location_names_the_last_good_hop() {
     let w = World::new().await;
     w.serve(
@@ -321,7 +320,6 @@ async fn wall404_s16_no_location_names_the_last_good_hop() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S17"]
 async fn wall404_s17_no_location_lists_every_good_status() {
     let w = World::new().await;
     w.serve(
@@ -369,7 +367,6 @@ async fn wall404_s19_temporary_hops_stay_plain() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S20"]
 async fn wall404_s20_no_location_after_a_permanent_hop() {
     let w = World::new().await;
     w.serve(

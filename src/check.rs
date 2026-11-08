@@ -308,6 +308,38 @@ fn redirects_to_root(chain: &[Hop], host: &HostConfig) -> bool {
         })
 }
 
+/// The statuses of a chain's hops, space-separated.
+pub(crate) fn statuses(chain: &[Hop]) -> String {
+    chain
+        .iter()
+        .map(|hop| hop.status.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The number of leading 301/308 hops in a chain.
+fn permanent_run(chain: &[Hop]) -> usize {
+    chain
+        .iter()
+        .take_while(|hop| matches!(hop.status, 301 | 308))
+        .count()
+}
+
+/// The reason for a chain whose last hop has no `Location`: when the hops before it start with
+/// a 301/308 run, names that run and the URL it reached, so the lost permanent move stays visible.
+fn no_location_reason(chain: &[Hop]) -> String {
+    let rest = chain.split_last().map_or(&[][..], |(_, rest)| rest);
+    let run = permanent_run(rest);
+    if run == 0 {
+        return "no location".to_owned();
+    }
+    format!(
+        "no location after {} to {}",
+        statuses(&rest[..run]),
+        chain[run].url
+    )
+}
+
 /// Classifies a fetch outcome by its status and redirect chain.
 ///
 /// A non-root URL is a soft-404 suspect, unless `host` turns soft-404 detection off, when its
@@ -334,6 +366,7 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
                 reason: "redirect to root".to_owned(),
             };
         }
+        Err(FetchError::NoLocation(chain)) => return unverifiable(no_location_reason(chain)),
         Err(err) => return unverifiable(err.to_string()),
     };
     let chain = &fetched.chain;
@@ -352,10 +385,7 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
             }
         }
         200..=299 => {
-            let leading = chain
-                .iter()
-                .take_while(|hop| matches!(hop.status, 301 | 308))
-                .count();
+            let leading = permanent_run(chain);
             let is_root = |hop: &Hop| hop.url.path() == "/";
             if host.soft404
                 && !is_root(&chain[0])
@@ -1418,6 +1448,25 @@ mod tests {
                 "no location",
                 Err(FetchError::NoLocation(vec![hop(301, "a")])),
                 unverifiable("no location"),
+            ),
+            (
+                "no location after a permanent hop",
+                Err(FetchError::NoLocation(vec![hop(301, "a"), hop(307, "b")])),
+                unverifiable("no location after 301 to https://m.example/b"),
+            ),
+            (
+                "no location on the second permanent hop",
+                Err(FetchError::NoLocation(vec![hop(301, "a"), hop(301, "b")])),
+                unverifiable("no location after 301 to https://m.example/b"),
+            ),
+            (
+                "no location after a permanent run",
+                Err(FetchError::NoLocation(vec![
+                    hop(308, "a"),
+                    hop(301, "b"),
+                    hop(307, "c"),
+                ])),
+                unverifiable("no location after 308 301 to https://m.example/c"),
             ),
             (
                 "loop",

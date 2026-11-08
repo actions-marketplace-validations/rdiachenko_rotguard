@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::apply::Unwritable;
 use crate::archive::NoFix;
-use crate::check::{Hop, Verdict};
+use crate::check::{Hop, Verdict, statuses};
 use crate::{Finding, Fix, Format, ManualReason};
 
 /// Counts of distinct URLs by outcome, computed by the caller.
@@ -240,14 +240,6 @@ fn write_entry(out: &mut String, finding: &Finding) {
     if let Some(detail) = detail {
         writeln!(out, "    {detail}").expect("writing to a String cannot fail");
     }
-}
-
-fn statuses(chain: &[Hop]) -> String {
-    chain
-        .iter()
-        .map(|hop| hop.status.to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn fix_detail(fix: &Fix) -> Option<Detail> {
