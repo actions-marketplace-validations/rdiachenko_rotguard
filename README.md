@@ -100,7 +100,7 @@ checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, 
 | `DEAD` | 404, 410 or a host DNS says doesn't exist, on two tries | the snapshot closest to the page's date |
 | `SUSPECT` | looks like a soft-404, e.g. redirected to the site's home page | a snapshot, never applied |
 | `TEMPORARY REDIRECT` | 302/303/307 | none; shows where it ends up |
-| `UNVERIFIABLE` | a 401, 403 or 999 the host doesn't give everywhere, 429, 5xx, timeout, TLS error, a DNS lookup that failed and so on | none |
+| `UNVERIFIABLE` | a 401, 403 or 999 the host doesn't give everywhere, a host that gives every URL the same page, a page that needs JavaScript, 429, 5xx, timeout, TLS error, a DNS lookup that failed and so on | none |
 | `BLOCKED` | 401, 403 or 999 that a made-up URL on the same host also gets: a bot wall | none; listed only with `--strict` |
 
 A detail line reading `manual fix: <reason>` means rotguard won't write that fix. You edit the

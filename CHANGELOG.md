@@ -6,6 +6,12 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+- A link that looks like a soft-404 is now `UNVERIFIABLE` instead of suspect when the host's root
+  gets the same page as the probe (`probe: every URL gets the same page`) or the page asks for
+  JavaScript (`probe: page needs JavaScript`). Detection may GET a host's root once.
+- Snapshot lookups run for dead links first, then suspects, so a deadline cuts off suspects first.
+- The action takes a `path` input (default `.`) for a site in a subfolder.
+
 ## [0.1.1] - 2026-11-08
 
 - The action is named "rotguard link checker & fixer" so it can be listed on the GitHub

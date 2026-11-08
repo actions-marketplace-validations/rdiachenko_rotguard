@@ -96,8 +96,8 @@ Outside `src/`, `action.yml` is a composite GitHub Action with 6 steps:
 2. Pick a cache key from the OS, the stable `rustc` version and `Cargo.lock`.
 3. Restore the build cache.
 4. Build rotguard.
-5. Run `--apply --format markdown`, always exiting 0 with the real code in the `exit-code`
-   output.
+5. Run `--apply --format markdown` on the folder in the `path` input (default `.`, the
+   workspace root), always exiting 0 with the real code in the `exit-code` output.
 6. Save the cache on a miss.
 
 `.github/workflows/release.yml` runs on a `vX.Y.Z` tag in 3 jobs: verify the tag against
@@ -113,7 +113,8 @@ Outside `src/`, `action.yml` is a composite GitHub Action with 6 steps:
 3. `check_all` the distinct URLs until `deadline_s`. A URL still running then is
    `UNVERIFIABLE` (`deadline`).
 4. Look up a snapshot for each dead or suspect link at its page's date (the run date when the
-   page has none).
+   page has none). Dead links go first, sorted by URL then date, then suspects, so a deadline
+   cuts off suspect lookups before dead ones.
 5. Build 1 finding per occurrence: a permanent redirect proposes its target, dead and suspect
    propose the snapshot, temporary, unverifiable and blocked propose nothing.
 6. With `--apply`, apply the fixes. Print the report; exit 1 if a dead, permanent or suspect
@@ -125,9 +126,28 @@ root or its permanent fix would point there (a middle hop through `/` doesn't co
 title matches a not-found phrase, or when a probe URL with a random last segment under the same
 parent path returns the same page. A link ending in `/` is probed as a sibling folder
 (`/a/b/` probes `/a/<token>/`); other paths probe `/a/<token>`. Probes are shared per origin,
-parent path and trailing slash. The same probe decides bot walls: a final 401, 403 or 999 is
-`Blocked` when the probe gets that status too. A host with `soft404 = false` skips the soft-404
-checks but keeps the bot-wall probe.
+parent path and trailing slash. A 404 or 410 probe skips the title phrase check; a failed probe
+doesn't. The same probe decides bot walls: a final 401, 403 or 999 is `Blocked` when the probe
+gets that status too. A host with `soft404 = false` skips the soft-404 checks but keeps the
+bot-wall probe.
+
+For a 2xx link whose probe also answered 2xx, 3 comparisons run in order:
+1. The probe ends at the link's final URL. If the link wasn't redirected, the probe says nothing
+   (the title phrase check still runs). If it was, the link is `Suspect` (`probe: same final
+   URL`).
+2. The titles match, the bodies are under 0.5 alike and both have at least 20 shingles: the
+   probe says nothing, because the 2 pages differ.
+3. Otherwise a title match or a body at least 0.9 alike makes the link a candidate, and checks 1
+   to 4 decide it:
+   1. A not-found title phrase makes it `Suspect`, and beats the 2 results below.
+   2. The link's visible text asks for JavaScript (`enable javascript`, `javascript is
+      required`, `requires javascript`, `javascript is disabled`): `Unverifiable` (`probe: page
+      needs JavaScript`).
+   3. rotguard GETs the host's root once per origin, the root control. If the root answers 2xx
+      and matches the probe on every signal the link matched (same title, body at least 0.5
+      alike), the host gives every URL the same page: `Unverifiable` (`probe: every URL gets the
+      same page`).
+   4. Otherwise the link is `Suspect` (`probe: same title` or `probe: similar body`).
 
 **Apply** (`--apply`, after the check): per file, re-read it and confirm each finding's span
 still holds its original URL, then write `<file>.rotguard.tmp` and rename it over the file. A
@@ -175,10 +195,13 @@ the compiled build in the site repo's Actions cache under
   platform without a binary builds from source, so a miss is slower, never wrong. A branch
   named exactly like a tag counts as a tag.
   `tests/acceptance/fetch.rs` pins the cases.
-- **Soft-404 judgement.** It decides between `Ok`, `Suspect` and `Blocked` from a shared probe
-  cache, so a change to a probe key or to the root-redirect rule shifts verdicts across links.
-  `tests/acceptance/soft404.rs`, `blocked.rs`, `directory_probe.rs` and `root_redirect.rs`
-  hold the agreed cases.
+- **Soft-404 judgement.** It decides between `Ok`, `Suspect`, `Unverifiable` and `Blocked` from a
+  shared probe cache, so a change to a probe key or to the root-redirect rule shifts verdicts
+  across links. The root control and the JavaScript check only downgrade a `Suspect` to
+  `Unverifiable`, never the other way, so a wrong guess costs a hand check, not a missed rotten
+  link; but a host that really serves 1 page for everything is reported as unverifiable too.
+  `tests/acceptance/soft404.rs`, `blocked.rs`, `directory_probe.rs`, `root_redirect.rs` and
+  `foreign_sites.rs` hold the agreed cases.
 
 ## Decisions
 
@@ -218,6 +241,9 @@ the compiled build in the site repo's Actions cache under
   caller's ref inside a nested composite action (`docs/design/release-binary.md`, D2).
 - The release workflow publishes only after every check and moves `v0` last; a published tag is
   never rewritten (`docs/design/release-binary.md`, D4).
+- A host that gives every URL the same page, and a page that needs JavaScript, are unverifiable,
+  not suspect, and dead links get their snapshot lookups first
+  (`docs/design/foreign-sites.md`, D1, D2).
 - The PR body is the markdown report, rendered by rotguard; the log and the job summary show the
   same report (`docs/design/readable-pr-body.md`, D1, D4).
 
