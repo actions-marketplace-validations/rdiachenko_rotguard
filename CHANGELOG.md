@@ -6,6 +6,8 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-08
+
 First public release.
 
 - Checks the outbound links of a markdown site's sources: markdown links, reference definitions,
