@@ -1,0 +1,81 @@
+{
+  "font": "hand",
+  "grid": {
+    "col": 300,
+    "row": 260
+  },
+  "nodes": [
+    {
+      "id": "you",
+      "label": "You",
+      "kind": "person",
+      "col": 0.4,
+      "row": 0
+    },
+    {
+      "id": "ci",
+      "label": "GitHub Actions",
+      "note": "weekly workflow",
+      "kind": "trigger",
+      "col": 1.6,
+      "row": 0
+    },
+    {
+      "id": "rotguard",
+      "label": "rotguard",
+      "note": "one binary",
+      "kind": "system",
+      "col": 1,
+      "row": 1
+    },
+    {
+      "id": "site",
+      "label": "Your site's sources",
+      "note": "rotguard.toml\ncontent/**/*.md",
+      "kind": "store",
+      "col": 2.38,
+      "row": 1
+    },
+    {
+      "id": "web",
+      "label": "Linked websites",
+      "kind": "external",
+      "col": 0.5,
+      "row": 2
+    },
+    {
+      "id": "wayback",
+      "label": "Wayback Machine",
+      "kind": "external",
+      "col": 1.85,
+      "row": 2
+    }
+  ],
+  "edges": [
+    {
+      "from": "you",
+      "to": "rotguard",
+      "label": "runs it,\nreads the report"
+    },
+    {
+      "from": "ci",
+      "to": "rotguard",
+      "label": "runs it weekly,\nopens a fix PR"
+    },
+    {
+      "from": "rotguard",
+      "to": "site",
+      "label": "reads links,\nwrites fixes"
+    },
+    {
+      "from": "rotguard",
+      "to": "web",
+      "label": "checks each link"
+    },
+    {
+      "from": "rotguard",
+      "to": "wayback",
+      "label": "finds snapshots\nof dead pages"
+    }
+  ]
+}

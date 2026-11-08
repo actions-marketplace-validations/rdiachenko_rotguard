@@ -13,6 +13,7 @@ field) is a new major version. 0.x counts as a major version: within it a releas
 adds.
 
 1. Set `version` in `Cargo.toml` to X.Y.Z and run `cargo build` to update `Cargo.lock`.
+   Set `v=` in the README's install snippet to X.Y.Z too.
 2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - <date>` and add an empty
    `## [Unreleased]` above it.
 3. Run the checks in `CONTRIBUTING.md`.

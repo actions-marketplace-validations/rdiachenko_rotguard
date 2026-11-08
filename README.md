@@ -8,16 +8,30 @@ Checks the outbound links of a markdown site for rot: dead links, redirects and 
 permanent redirect, or a Wayback Machine snapshot for a dead page. With `--apply` it writes those
 fixes back into your files.
 
+How rotguard fits around your site:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/overview-dark.png">
+  <img alt="You or a weekly GitHub Actions workflow run rotguard; it reads your site's markdown sources, checks each linked website, finds Wayback Machine snapshots of dead pages, and writes fixes back." src="docs/diagrams/overview-light.png" width="844">
+</picture>
+
 ## Install
 
-Needs Rust 1.88 or newer.
+On Linux, download a static binary from the
+[releases page](https://github.com/rdiachenko/rotguard/releases). Set `v` to the latest version
+and `arch` to `x86_64` or `aarch64`:
+
+```sh
+v=0.1.0 arch=x86_64
+curl -fsSLo rotguard "https://github.com/rdiachenko/rotguard/releases/download/v$v/rotguard-$v-$arch-unknown-linux-musl"
+chmod +x rotguard && sudo mv rotguard /usr/local/bin/
+```
+
+Anywhere else, build it with Rust 1.88 or newer:
 
 ```sh
 cargo install --locked --git https://github.com/rdiachenko/rotguard
 ```
-
-Or download the binary for Linux (x86_64 or arm64) from the
-[releases page](https://github.com/rdiachenko/rotguard/releases) and put it on your `PATH`.
 
 ## Use
 
