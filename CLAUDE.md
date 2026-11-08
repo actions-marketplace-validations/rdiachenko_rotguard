@@ -29,21 +29,9 @@ release is final (immutable releases): fix forward with the next patch version. 
 after publishing leaves the release in place; move `v<major>` by hand with
 `git tag -f v<major> <sha> && git push -f origin v<major>`.
 
-The arm64 build assumes the `ubuntu-24.04-arm` image ships rustup. If that job fails, nothing
-publishes.
+### Check at the next release
 
-### First release only
-
-1. Ask the user, then make the repo public: `gh repo edit rdiachenko/rotguard --visibility public
-   --accept-visibility-change-consequences`. It is outward-facing.
-2. Turn on immutable releases (repo Settings, General, Releases) and private vulnerability
-   reporting: `gh api -X PUT repos/rdiachenko/rotguard/private-vulnerability-reporting`.
-3. After v0.1.0 publishes, switch the blog
-   (`../rdiachenko.github.com/.github/workflows/rotguard.yml`) to `@v0`, run it with
-   `gh workflow run rotguard.yml` and check its log shows `Download rotguard 0.1.0 (x86_64)`.
-   That confirms the action reads the tag from its folder name and that `if:` works on composite
-   steps. If the log shows a build instead, the ref detection failed: the run is slower, not
-   wrong, but fix `action.yml`.
-4. After the second release, check `git ls-remote --tags origin v0` points at it. That confirms
-   `v0` can still be force-pushed with immutable releases on. If not, make `v0` a branch that
-   each release fast-forwards; sites don't change.
+`v0` has been pushed once, at v0.1.0. After the next release, check that
+`git ls-remote --tags origin v0` points at it: that confirms `v0` can still be force-pushed with
+immutable releases on. If it can't, make `v0` a branch that each release fast-forwards; sites
+don't change. Then delete this section.

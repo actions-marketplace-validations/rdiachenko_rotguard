@@ -384,16 +384,17 @@ reads its certificates from the keychain, not these variables.
   HTTPS links.
 - probed: the same for `aarch64-unknown-linux-musl` on arm64 Docker, 37 s, static; runs and
   checks the same links.
-- probed: the blog's runs unpack the action at `…/_actions/rdiachenko/rotguard/main`. Tag refs:
-  unverified — fallback: a non-matching ref builds from source (R6).
+- probed: the blog's runs unpack the action at `…/_actions/rdiachenko/rotguard/main`. For a tag,
+  the ref read from the folder path matches too: the blog's first `@v0` run (2026-11-08) logged
+  `Download rotguard 0.1.0 (x86_64)` and built nothing.
 - read from source, not probed: a ref with a slash becomes nested folders
   (`ActionManager.cs` joins the actions folder, `owner/repo` and the ref unchanged) — fallback: a
   ref that doesn't match the tag pattern builds (R6).
 - probed: with `SSL_CERT_FILE` and `SSL_CERT_DIR` pointing at an empty folder, the static binary
   panics at `src/check.rs:104` and exits 101, so S14 reproduces the missing-bundle case.
 - unverified — fallback in D4: `v0` stays force-pushable with immutable releases on.
-- unverified: `if:` on a composite step reading `steps.fetch.outputs.mode` (documented in the
-  action metadata syntax); the first `@v0` run confirms it.
+- probed: `if:` on a composite step reading `steps.fetch.outputs.mode` works: the same run
+  skipped the key, cache, build and save steps.
 
 **Invariants**:
 - Nothing is installed at `target/release/rotguard` before its checksum passes (fetch step).
