@@ -442,7 +442,9 @@ pub async fn check_all(
     verdicts
 }
 
-/// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`; a 2xx
+/// One URL: fetch with retries; a first `Dead` is fetched again after `recheck_delay`; a
+/// `Dead` that stays so is `Unverifiable` when the root of its last hop's origin answers 404
+/// or 410 too (a site that answers every path so is a wall, not a missing page); a 2xx
 /// that passes classification is probed for soft-404 behaviour and its title is checked
 /// against the not-found `phrases`.
 async fn check_one(
@@ -459,6 +461,15 @@ async fn check_one(
         outcome = fetch_with_retries(fetcher, url).await;
     }
     let verdict = classify(&outcome, host);
+    if let Ok(fetched) = &outcome
+        && matches!(verdict, Verdict::Dead { .. })
+        && let Some(last) = fetched.chain.last()
+        && let RootPage::Status(s @ (404 | 410)) = *probes.root(fetcher, &last.url).await
+    {
+        return Verdict::Unverifiable {
+            reason: format!("{}, host root answers {s} too", last.status),
+        };
+    }
     if let Ok(fetched) = &outcome
         && matches!(verdict, Verdict::Unverifiable { .. })
         && let Some(last) = fetched.chain.last()
@@ -570,7 +581,7 @@ fn needs_javascript(html: &str) -> bool {
 /// first check that needs it.
 type ProbeCache = HashMap<(String, String, bool), Arc<OnceCell<Arc<ProbeResult>>>>;
 
-/// What a site's root page returned, the control for a probe match.
+/// What a site's root page returned: the control for a probe match and for a 404.
 #[derive(Debug)]
 enum RootPage {
     /// The root ended in 2xx.
@@ -578,8 +589,10 @@ enum RootPage {
         title: String,
         shingles: HashSet<String>,
     },
-    /// The root could not be fetched or did not end in 2xx.
-    Unusable,
+    /// The root ended in this non-2xx status.
+    Status(u16),
+    /// The root could not be fetched.
+    Failed,
 }
 
 /// Probe results shared by all checks, one fetch per (origin, parent path, whether the path
@@ -674,7 +687,8 @@ impl Probes {
         title_says_not_found(&title, phrases)
     }
 
-    /// The root page of `url`'s origin, fetched by the first caller.
+    /// The root page of `url`'s origin, fetched by the first caller and shared by the soft-404
+    /// control and the 404 check. Its status is that of the end of its redirect chain.
     async fn root(&self, fetcher: &Fetcher, url: &Url) -> Arc<RootPage> {
         let cell = {
             let mut roots = self.roots.lock().expect("no code panics holding this lock");
@@ -687,7 +701,7 @@ impl Probes {
         let root = cell
             .get_or_init(|| async {
                 let Ok(fetched) = fetcher.fetch(&target).await else {
-                    return Arc::new(RootPage::Unusable);
+                    return Arc::new(RootPage::Failed);
                 };
                 match fetched.chain.last() {
                     Some(last) if (200..300).contains(&last.status) => {
@@ -697,7 +711,8 @@ impl Probes {
                             shingles: shingles(&text),
                         })
                     }
-                    _ => Arc::new(RootPage::Unusable),
+                    Some(last) => Arc::new(RootPage::Status(last.status)),
+                    None => Arc::new(RootPage::Failed),
                 }
             })
             .await;
@@ -1655,6 +1670,17 @@ mod tests {
         (server, times)
     }
 
+    /// Answers `/` with `status` ahead of `scripted()`'s catch-all, so the root fetch is not
+    /// one of the scripted replies.
+    async fn mount_root(server: &MockServer, status: u16) {
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(status))
+            .with_priority(1)
+            .mount(server)
+            .await;
+    }
+
     fn unverifiable_reason(verdicts: &HashMap<Url, Verdict>, url: &Url) -> String {
         match &verdicts[url] {
             Verdict::Unverifiable { reason } => reason.clone(),
@@ -1742,6 +1768,7 @@ mod tests {
     #[tokio::test]
     async fn a_404_twice_is_dead_after_the_recheck_delay() {
         let (server, times) = scripted(vec![ResponseTemplate::new(404)]).await;
+        mount_root(&server, 200).await;
         let u = url(&server, "/x");
         let got = check_all_with_test_client(
             vec![u.clone()],
@@ -1759,6 +1786,25 @@ mod tests {
         let times = times.lock().unwrap();
         assert_eq!(times.len(), 2);
         assert!(times[1] - times[0] >= Duration::from_millis(300));
+    }
+
+    #[tokio::test]
+    async fn a_404_twice_is_unverifiable_when_the_root_answers_404() {
+        let (server, times) = scripted(vec![ResponseTemplate::new(404)]).await;
+        mount_root(&server, 404).await;
+        let u = url(&server, "/x");
+        let got = check_all_with_test_client(
+            vec![u.clone()],
+            &config_for("recheck_delay_ms = 0"),
+            far(),
+            |_| {},
+        )
+        .await;
+        assert_eq!(
+            unverifiable_reason(&got, &u),
+            "404, host root answers 404 too"
+        );
+        assert_eq!(times.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

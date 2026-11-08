@@ -29,7 +29,6 @@ fn no_location(code: u16) -> ResponseTemplate {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn wall404_s1_wall_host_is_unverifiable() {
     let w = World::new().await;
     w.serve(wall()).await;
@@ -50,7 +49,6 @@ async fn wall404_s1_wall_host_is_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn wall404_s2_strict_fails_and_leaves_the_file() {
     let w = World::new().await;
     w.serve(wall()).await;
@@ -67,7 +65,6 @@ async fn wall404_s2_strict_fails_and_leaves_the_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn wall404_s3_markdown_report_says_could_not_check() {
     let w = World::new().await;
     w.serve(wall()).await;
@@ -84,7 +81,6 @@ async fn wall404_s3_markdown_report_says_could_not_check() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn wall404_s4_root_410_names_its_status() {
     let w = World::new().await;
     w.serve(
@@ -104,7 +100,6 @@ async fn wall404_s4_root_410_names_its_status() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S5"]
 async fn wall404_s5_linked_root_is_unverifiable() {
     let w = World::new().await;
     w.serve(wall()).await;
@@ -201,7 +196,6 @@ async fn wall404_s9_slow_root_keeps_dead() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S10"]
 async fn wall404_s10_root_redirect_to_404_is_a_wall() {
     let w = World::new().await;
     w.serve(
@@ -236,7 +230,6 @@ async fn wall404_s11_root_redirect_to_live_page_keeps_dead() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S12"]
 async fn wall404_s12_redirect_into_a_wall_host_is_unverifiable() {
     let w = World::new().await;
     // Nothing is mounted on W, so wiremock answers every request there with 404.
@@ -251,7 +244,6 @@ async fn wall404_s12_redirect_into_a_wall_host_is_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S13"]
 async fn wall404_s13_one_root_fetch_per_host() {
     let w = World::new().await;
     w.serve(wall()).await;
@@ -287,7 +279,6 @@ async fn wall404_s14_healthy_host_never_fetches_its_root() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S15"]
 async fn wall404_s15_soft404_off_still_checks_the_root() {
     let mut w = World::new().await;
     w.configure(|s| s.no_soft404_hosts = vec!["127.0.0.1".to_owned()]);
