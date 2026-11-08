@@ -2,3 +2,4 @@
 .whittle/run/
 .env*
 .DS_Store
+.playwright-mcp/
