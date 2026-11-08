@@ -2,6 +2,7 @@
 //! `progress.rs` also drives the library, for S4.
 
 mod action;
+mod action_path;
 mod apply;
 mod apply_failed;
 mod archive;
@@ -14,7 +15,9 @@ mod directory_probe;
 mod dns;
 mod extract;
 mod fetch;
+mod foreign_sites;
 mod format;
+mod lookup_order;
 mod markdown;
 mod progress;
 mod release;

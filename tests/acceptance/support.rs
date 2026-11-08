@@ -28,6 +28,7 @@ pub const USER_AGENT: &str = "rotguard-test/1.0";
 #[derive(Debug, Clone)]
 pub struct Req {
     pub path: String,
+    pub query: Option<String>,
     pub method: String,
     pub user_agent: Option<String>,
     pub at: Instant,
@@ -41,6 +42,7 @@ impl Log {
     fn push(&self, request: &Request) {
         let req = Req {
             path: request.url.path().to_owned(),
+            query: request.url.query().map(str::to_owned),
             method: request.method.to_string(),
             user_agent: request
                 .headers
