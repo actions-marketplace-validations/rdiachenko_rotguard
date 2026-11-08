@@ -74,9 +74,19 @@ jobs:
           title: Fix rotted links
           commit-message: Fix rotted links
           body-path: ${{ steps.rotguard.outputs.report }}
+      - if: steps.rotguard.outputs.exit-code != '0'
+        env:
+          CODE: ${{ steps.rotguard.outputs.exit-code }}
+        run: |
+          if [ "$CODE" = 1 ]; then
+            echo "::error::rotguard exited 1: a link needs a hand fix, see the Run rotguard --apply step"
+          else
+            echo "::error::rotguard failed (exit $CODE), see the Run rotguard --apply step"
+          fi
+          exit 1
 ```
 
-`web/site` needs its own `rotguard.toml`. Keep the exit-code step from the first workflow if you want the job to fail when a link needs a hand fix.
+`web/site` needs its own `rotguard.toml`. A wrong `path` makes rotguard exit 2, which the last step turns into a failed job.
 
 ## One setting
 
