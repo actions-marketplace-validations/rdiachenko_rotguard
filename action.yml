@@ -32,9 +32,9 @@ runs:
         asset="rotguard-$version-$target"
         base="https://github.com/rdiachenko/rotguard/releases/download/v$version"
         echo "Download rotguard $version (${target%%-*})"
-        curl --fail --location --retry 3 --silent --show-error --output "$RUNNER_TEMP/$asset" "$base/$asset" \
+        curl --fail --location --retry 3 --connect-timeout 10 --max-time 120 --silent --show-error --output "$RUNNER_TEMP/$asset" "$base/$asset" \
           || { echo "::error::rotguard: cannot download the release binary ($base/$asset)"; exit 1; }
-        curl --fail --location --retry 3 --silent --show-error --output "$RUNNER_TEMP/SHA256SUMS" "$base/SHA256SUMS" \
+        curl --fail --location --retry 3 --connect-timeout 10 --max-time 120 --silent --show-error --output "$RUNNER_TEMP/SHA256SUMS" "$base/SHA256SUMS" \
           || { echo "::error::rotguard: cannot download the checksums ($base/SHA256SUMS)"; exit 1; }
         (cd "$RUNNER_TEMP" && grep -F " $asset" SHA256SUMS | sha256sum -c -) \
           || { echo "::error::rotguard: checksum mismatch for $asset"; exit 1; }
