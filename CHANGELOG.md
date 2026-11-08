@@ -6,6 +6,11 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+- A 404 or 410 is now `UNVERIFIABLE` instead of `DEAD` when the host's root answers 404 or 410
+  too, as on a bot wall that answers every path alike. Detection may GET a host's root once more.
+- A redirect chain that ends with no usable `Location` after a 301 or 308 now says
+  `no location after <statuses> to <target>`, naming where the permanent redirect ended.
+
 ## [0.2.0] - 2026-11-08
 
 - Fewer false soft-404s on sites unlike a personal blog:

@@ -34,7 +34,7 @@ Context: rotguard
   `UNVERIFIABLE`, never dead, after 2 retries (a 429 once, honouring `Retry-After` up to 30 s).
   A 401, 403 or 999 is `BLOCKED` when a made-up URL beside it gets the same status, else
   `UNVERIFIABLE`. Only a 404, 410 or a DNS answer that the name doesn't exist, on 2 tries,
-  makes a link `DEAD`.
+  makes a link `DEAD`, and a 404 or 410 only when the host's root doesn't answer 404 or 410 too.
 - **Wayback Machine**: 3 attempts per query. When it fails, has no capture or runs past the
   deadline, the finding says `manual fix: archive unreachable`, `no archived copy` or
   `deadline`, and nothing is written.
@@ -128,8 +128,11 @@ parent path returns the same page. A link ending in `/` is probed as a sibling f
 (`/a/b/` probes `/a/<token>/`); other paths probe `/a/<token>`. Probes are shared per origin,
 parent path and trailing slash. A 404 or 410 probe skips the title phrase check; a failed probe
 doesn't. The same probe decides bot walls: a final 401, 403 or 999 is `Blocked` when the probe
-gets that status too. A host with `soft404 = false` skips the soft-404 checks but keeps the
-bot-wall probe.
+gets that status too. The root control (below) also serves the 404 check: a link that stays 404
+or 410 after the recheck is `Unverifiable` when the root of its last hop's origin answers 404 or
+410 too, because a wall answers every path alike. A root that fails or answers anything else
+leaves the link `Dead`. A host with `soft404 = false` skips the soft-404 checks but keeps the
+bot-wall probe and this 404 check.
 
 For a 2xx link whose probe also answered 2xx, 3 comparisons run in order:
 1. The probe ends at the link's final URL. If the link wasn't redirected, the probe says nothing
@@ -198,8 +201,9 @@ the compiled build in the site repo's Actions cache under
 - **Soft-404 judgement.** It decides between `Ok`, `Suspect`, `Unverifiable` and `Blocked` from a
   shared probe cache, so a change to a probe key or to the root-redirect rule shifts verdicts
   across links. The root control and the JavaScript check only downgrade a `Suspect` to
-  `Unverifiable`, never the other way, so a wrong guess costs a hand check, not a missed rotten
-  link; but a host that really serves 1 page for everything is reported as unverifiable too.
+  `Unverifiable`, and the root control also downgrades a `Dead`, never the other way, so a wrong
+  guess costs a hand check, not a missed rotten link; but a host that really serves 1 page for
+  everything, or whose root 404s, is reported as unverifiable too.
   `tests/acceptance/soft404.rs`, `blocked.rs`, `directory_probe.rs`, `root_redirect.rs` and
   `foreign_sites.rs` hold the agreed cases.
 
@@ -220,6 +224,8 @@ the compiled build in the site repo's Actions cache under
   (`docs/design/report-format.md`, D1, D3).
 - A 401, 403 or 999 is a bot wall only when a same-folder probe gets the same status, and blocked
   links are listed only with `--strict` (`docs/design/bot-walls.md`, D1, D2).
+- A 404 or 410 is dead only when the host's root doesn't answer 404 or 410 too, and a root that
+  fails or answers anything else leaves the link dead (`docs/design/404-walls.md`, D1, D2).
 - A DNS failure is dead only when the answer says the name doesn't exist; any other lookup
   failure is unverifiable, so it never leads to a write (`docs/design/dns-hiccup.md`, D1).
 - A fix `--apply` couldn't write is a hand fix, marked in apply so every report format says so
