@@ -222,7 +222,16 @@ fn action_s4_action_yml_has_the_agreed_shape() {
     let run_at = run_step_index(steps);
 
     assert_eq!(action["runs"]["using"].as_str(), Some("composite"));
-    assert!(action.get("inputs").is_none(), "action.yml has inputs");
+    if let Some(inputs) = action.get("inputs") {
+        let inputs = inputs.as_mapping().expect("inputs is a mapping");
+        assert!(
+            inputs.keys().all(|key| key.as_str() == Some("path")),
+            "inputs other than path: {inputs:?}"
+        );
+        let path = &inputs["path"];
+        assert_eq!(path["default"].as_str(), Some("."), "{path:?}");
+        assert_eq!(path["required"].as_bool(), Some(false), "{path:?}");
+    }
 
     let build = run_text(&steps[run_at.checked_sub(1).expect("a step before id: run")]);
     assert!(
