@@ -9,7 +9,6 @@ fn dated(date: &str, link: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S10"]
 async fn s10_dead_lookups_come_before_suspect_lookups() {
     let w = World::new().await;
     // The dead path sorts after both suspect paths, so only a dead-first order passes.

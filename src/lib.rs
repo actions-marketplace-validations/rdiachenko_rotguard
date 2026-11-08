@@ -3,12 +3,10 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use chrono::NaiveDate;
 use clap::{Parser, ValueEnum};
 use globset::{GlobBuilder, GlobSetBuilder};
-use tokio::task::JoinSet;
 use tokio::time::Instant;
 use url::Url;
 use walkdir::WalkDir;
@@ -304,16 +302,23 @@ async fn check_pages(
     progress.finish();
 
     let run_date = chrono::Local::now().date_naive();
-    let lookups: HashSet<(Url, NaiveDate)> = occurrences
-        .iter()
-        .filter(|o| {
-            matches!(
-                verdicts.get(&o.url),
-                Some(Verdict::Dead { .. } | Verdict::Suspect { .. })
-            )
-        })
-        .map(|o| (o.url.clone(), o.date.unwrap_or(run_date)))
-        .collect();
+    let keys_where = |wanted: fn(&Verdict) -> bool| -> Vec<(Url, NaiveDate)> {
+        let mut keys: Vec<_> = occurrences
+            .iter()
+            .filter(|o| verdicts.get(&o.url).is_some_and(wanted))
+            .map(|o| (o.url.clone(), o.date.unwrap_or(run_date)))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    };
+    let mut lookups = keys_where(|v| matches!(v, Verdict::Dead { .. }));
+    let dead_keys: HashSet<_> = lookups.iter().cloned().collect();
+    lookups.extend(
+        keys_where(|v| matches!(v, Verdict::Suspect { .. }))
+            .into_iter()
+            .filter(|key| !dead_keys.contains(key)),
+    );
     let n = lookups.len();
     let snapshots = if n > 0 {
         progress.start(Phase::Archive, n);
@@ -391,32 +396,20 @@ fn fragment_of(link: &str) -> Option<&str> {
     link.split_once('#').map(|(_, fragment)| fragment)
 }
 
-/// Looks up all snapshots concurrently; the archive's own gate spaces the requests.
+/// Looks up the snapshots one after another in the given order, so dead links go first.
 async fn look_up_snapshots(
-    lookups: HashSet<(Url, NaiveDate)>,
+    lookups: Vec<(Url, NaiveDate)>,
     client: reqwest::Client,
     cfg: &Config,
     deadline: Instant,
     mut on_done: impl FnMut(usize),
 ) -> HashMap<(Url, NaiveDate), Result<Url, NoFix>> {
-    let archive = Arc::new(Archive::new(client, cfg));
-    let mut tasks = JoinSet::new();
+    let archive = Archive::new(client, cfg);
+    let mut snapshots = HashMap::with_capacity(lookups.len());
     for (url, date) in lookups {
-        let archive = Arc::clone(&archive);
-        tasks.spawn(async move {
-            let result = archive.snapshot(&url, date, deadline).await;
-            ((url, date), result)
-        });
-    }
-    let mut snapshots = HashMap::new();
-    let mut count = 0;
-    while let Some(joined) = tasks.join_next().await {
-        count += 1;
-        on_done(count);
-        // A panicked lookup leaves its key absent, which the caller reports as a deadline.
-        if let Ok((key, result)) = joined {
-            snapshots.insert(key, result);
-        }
+        let result = archive.snapshot(&url, date, deadline).await;
+        snapshots.insert((url, date), result);
+        on_done(snapshots.len());
     }
     snapshots
 }
