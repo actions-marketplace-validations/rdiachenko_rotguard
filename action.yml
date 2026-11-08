@@ -1,5 +1,8 @@
 name: rotguard
 description: Check a markdown site's links and write the safe fixes with rotguard --apply.
+branding:
+  icon: shield
+  color: blue
 outputs:
   exit-code:
     description: rotguard's exit code. 0 or 1 mean the fixes are complete (1 means some links need a hand fix); any other code means a failed run.
