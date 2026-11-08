@@ -495,6 +495,10 @@ async fn check_one(
 const PROBE_TOKEN_LEN: usize = 24;
 /// Shingle similarity from which two bodies count as the same page.
 const SIMILAR_BODY: f64 = 0.9;
+/// Shingle similarity below which two bodies count as different pages.
+const DIFFERENT_BODY: f64 = 0.5;
+/// Fewest shingles each body needs for a low similarity to count as evidence.
+const MIN_SHINGLES: usize = 20;
 
 /// What a probe URL returned, kept for comparing with every page under the same parent path.
 #[derive(Debug)]
@@ -579,9 +583,18 @@ impl Probes {
                             return Soft404::Suspect("probe: same final URL".to_owned());
                         }
                         return title_says_not_found(&title, phrases);
-                    } else if !title.is_empty() && title == *probe_title {
-                        return Soft404::Suspect("probe: same title".to_owned());
-                    } else if jaccard(&shingles(&text), probe_shingles) >= SIMILAR_BODY {
+                    }
+                    let link_shingles = shingles(&text);
+                    let similarity = jaccard(&link_shingles, probe_shingles);
+                    if !title.is_empty() && title == *probe_title {
+                        // A shared title over clearly different text is a site-wide title.
+                        let different = similarity < DIFFERENT_BODY
+                            && link_shingles.len() >= MIN_SHINGLES
+                            && probe_shingles.len() >= MIN_SHINGLES;
+                        if !different {
+                            return Soft404::Suspect("probe: same title".to_owned());
+                        }
+                    } else if similarity >= SIMILAR_BODY {
                         return Soft404::Suspect("probe: similar body".to_owned());
                     }
                 }
@@ -1873,6 +1886,21 @@ mod tests {
                 "completely different words appear here",
             )
         };
+        // `n` words `{tag}0..` that no other tag shares.
+        let run = |tag: &str, n: usize| {
+            (0..n)
+                .map(|i| format!("{tag}{i}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        // Pages titled "Shared" (1 word, so a body of n words has n - 1 shingles) whose
+        // bodies share `shared` words and then differ for `own` words each.
+        let overlap = |shared: usize, own: usize| {
+            (
+                page("Shared", &format!("{} {}", run("s", shared), run("a", own))),
+                page("Shared", &format!("{} {}", run("s", shared), run("b", own))),
+            )
+        };
         // (label, routes, config, requested path, expected suspect reason or None for ok,
         // expected request count)
         let cases: Vec<ProbeCase> = vec![
@@ -1887,6 +1915,61 @@ mod tests {
                 ],
                 "",
                 "/docs/real",
+                Some("probe: same title"),
+                None,
+            ),
+            (
+                "same title, different text, 20 shingles each",
+                vec![
+                    ("^/t/a$", page("Shared", &run("a", 21))),
+                    ("^/t/[a-z0-9]{24}$", page("Shared", &run("b", 21))),
+                ],
+                "",
+                "/t/a",
+                None,
+                None,
+            ),
+            (
+                "same title, different text, 19 shingles in the link",
+                vec![
+                    ("^/t/a$", page("Shared", &run("a", 20))),
+                    ("^/t/[a-z0-9]{24}$", page("Shared", &run("b", 21))),
+                ],
+                "",
+                "/t/a",
+                Some("probe: same title"),
+                None,
+            ),
+            (
+                "same title, different text, 19 shingles in the probe",
+                vec![
+                    ("^/t/a$", page("Shared", &run("a", 21))),
+                    ("^/t/[a-z0-9]{24}$", page("Shared", &run("b", 20))),
+                ],
+                "",
+                "/t/a",
+                Some("probe: same title"),
+                None,
+            ),
+            (
+                "same title, Jaccard just under 0.5",
+                {
+                    let (link, probe) = overlap(20, 10);
+                    vec![("^/t/a$", link), ("^/t/[a-z0-9]{24}$", probe)]
+                },
+                "",
+                "/t/a",
+                None,
+                None,
+            ),
+            (
+                "same title, Jaccard exactly 0.5",
+                {
+                    let (link, probe) = overlap(21, 10);
+                    vec![("^/t/a$", link), ("^/t/[a-z0-9]{24}$", probe)]
+                },
+                "",
+                "/t/a",
                 Some("probe: same title"),
                 None,
             ),

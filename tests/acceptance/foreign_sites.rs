@@ -62,7 +62,6 @@ async fn s2_redirected_link_ending_where_the_probe_ends_stays_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn s3_site_wide_title_over_different_pages_is_ok_without_a_root_request() {
     let w = World::new().await;
     let title = "Associates Central - Help";
