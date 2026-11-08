@@ -101,7 +101,7 @@ rotguard reads `rotguard.toml` from the site directory (the directory you run it
 
 - Type: table of tables, keyed by host name. Default: empty.
 - Valid keys: `soft404` (boolean, default `true`). Any other key prints `invalid rotguard.toml`.
-- Effect: `soft404 = false` turns soft-404 detection off for URLs on that host: no soft-404 probe request, no `not_found_phrases` check, and a redirect to the site root is not suspect. With it on, detection may also GET the host's root once and can report UNVERIFIABLE (`probe: every URL gets the same page`, `probe: page needs JavaScript`); `false` turns all of that off. A 401, 403 or 999 on that host still gets the bot-wall probe. A host with no entry has `soft404` on.
+- Effect: `soft404 = false` turns soft-404 detection off for URLs on that host: no soft-404 probe request, no `not_found_phrases` check, and a redirect to the site root is not suspect. With it on, detection may also GET the host's root once and can report UNVERIFIABLE (`probe: every URL gets the same page`, `probe: page needs JavaScript`); `false` turns those off. A 401, 403 or 999 on that host still gets the bot-wall probe. A 404 or 410 on that host that stays dead after the recheck still gets the root check: it may GET the host's root once and can report UNVERIFIABLE (`404, host root answers 404 too`) when the root answers 404 or 410 too. A host with no entry has `soft404` on.
 - Matching: keys are lowercased and matched exactly against the host of the URL as written in the page. `www.` is not folded and subdomains are not matched.
 - Error: two keys that are equal once lowercased print `` invalid rotguard.toml: `[hosts]` lists "<host>" more than once (keys ignore case) ``.
 
