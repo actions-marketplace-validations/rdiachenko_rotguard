@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/rdiachenko/rotguard/actions/workflows/ci.yml/badge.svg)](https://github.com/rdiachenko/rotguard/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Marketplace](https://img.shields.io/badge/marketplace-rotguard-blue?logo=github)](https://github.com/marketplace/actions/rotguard-link-checker-fixer)
+[![Release](https://img.shields.io/github/v/release/rdiachenko/rotguard)](https://github.com/rdiachenko/rotguard/releases)
 
 Checks the outbound links of a markdown site for rot: dead links, redirects and soft-404s
 (pages that answer 200 but are really gone). It proposes a fix for each one: the new URL for a
