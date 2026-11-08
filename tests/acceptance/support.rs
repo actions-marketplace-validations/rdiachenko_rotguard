@@ -123,7 +123,9 @@ struct Route {
 }
 
 /// A routing table. The first route whose pattern matches the request path answers; a handler
-/// gets the request and the number of earlier hits on its route. Unmatched paths answer 404.
+/// gets the request and the number of earlier hits on its route. An unmatched `/` answers a 200
+/// home page and every other unmatched path answers 404; a test that needs another root mounts
+/// `/` itself.
 #[derive(Default)]
 pub struct Routes(Vec<Route>);
 
@@ -180,6 +182,9 @@ impl Respond for Router {
                 let n = route.hits.fetch_add(1, Ordering::SeqCst);
                 return (route.handler)(request, n);
             }
+        }
+        if path == "/" {
+            return page("Home", "welcome");
         }
         status(404)
     }
