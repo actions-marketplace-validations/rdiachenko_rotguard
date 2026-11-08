@@ -26,3 +26,4 @@ mod root_redirect;
 mod simplify;
 mod soft404;
 mod support;
+mod wall404;
