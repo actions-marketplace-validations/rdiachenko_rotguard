@@ -117,7 +117,6 @@ async fn s4_page_that_needs_javascript_is_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S5"]
 async fn s5_root_that_matches_the_probe_is_unverifiable_without_a_lookup() {
     let w = World::new().await;
     let same = page("Reddit", "");
@@ -146,7 +145,6 @@ async fn s5_root_that_matches_the_probe_is_unverifiable_without_a_lookup() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn s6_root_that_mostly_matches_the_probe_is_unverifiable() {
     let w = World::new().await;
     let title = "Frequently Asked Questions";
@@ -172,7 +170,6 @@ async fn s6_root_that_mostly_matches_the_probe_is_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S7"]
 async fn s7_root_unlike_the_probe_keeps_the_suspect() {
     let w = World::new().await;
     let body = words("w", 200);
@@ -192,7 +189,6 @@ async fn s7_root_unlike_the_probe_keeps_the_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S8"]
 async fn s8_not_found_title_wins_over_unverifiable() {
     let w = World::new().await;
     let same = page("Page not found", "");
@@ -212,7 +208,6 @@ async fn s8_not_found_title_wins_over_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S9"]
 async fn s9_root_is_fetched_once_per_origin() {
     let w = World::new().await;
     let same = page("Shared Site", &words("w", 100));

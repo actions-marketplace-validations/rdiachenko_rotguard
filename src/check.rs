@@ -522,7 +522,8 @@ enum Soft404 {
     NoEvidence,
     /// The page looks like a soft 404, for this reason.
     Suspect(String),
-    /// The page matches the probe, but a page that needs JavaScript says nothing about the link.
+    /// The page matches the probe, but the match says nothing about the link: the page needs
+    /// JavaScript, or the site's root page matches the probe too.
     CantTell(String),
 }
 
@@ -548,17 +549,12 @@ const NEEDS_JAVASCRIPT: [&str; 4] = [
     "javascript is disabled",
 ];
 
-/// What a probe match (`reason`) means for a page: a not-found title still makes it a
-/// `Suspect`, a page that needs JavaScript is `CantTell`, anything else is `Suspect(reason)`.
-fn suspect_or_cant_tell(html: &str, title: &str, phrases: &[String], reason: &str) -> Soft404 {
-    if !needs_javascript(html) {
-        return Soft404::Suspect(reason.to_owned());
-    }
+/// A probe match that says nothing about the link: a not-found title still makes it a
+/// `Suspect`, anything else is `CantTell(reason)`.
+fn suspect_or_cant_tell(title: &str, phrases: &[String], reason: &str) -> Soft404 {
     match title_says_not_found(title, phrases) {
         found @ Soft404::Suspect(_) => found,
-        Soft404::NoEvidence | Soft404::CantTell(_) => {
-            Soft404::CantTell("probe: page needs JavaScript".to_owned())
-        }
+        Soft404::NoEvidence | Soft404::CantTell(_) => Soft404::CantTell(reason.to_owned()),
     }
 }
 
@@ -574,11 +570,24 @@ fn needs_javascript(html: &str) -> bool {
 /// first check that needs it.
 type ProbeCache = HashMap<(String, String, bool), Arc<OnceCell<Arc<ProbeResult>>>>;
 
+/// What a site's root page returned, the control for a probe match.
+#[derive(Debug)]
+enum RootPage {
+    /// The root ended in 2xx.
+    Usable {
+        title: String,
+        shingles: HashSet<String>,
+    },
+    /// The root could not be fetched or did not end in 2xx.
+    Unusable,
+}
+
 /// Probe results shared by all checks, one fetch per (origin, parent path, whether the path
-/// ends in `/`).
+/// ends in `/`), and one root page per origin.
 #[derive(Debug, Default)]
 struct Probes {
     cache: StdMutex<ProbeCache>,
+    roots: StdMutex<HashMap<String, Arc<OnceCell<Arc<RootPage>>>>>,
 }
 
 impl Probes {
@@ -619,21 +628,42 @@ impl Probes {
                     }
                     let link_shingles = shingles(&text);
                     let similarity = jaccard(&link_shingles, probe_shingles);
-                    if !title.is_empty() && title == *probe_title {
-                        // A shared title over clearly different text is a site-wide title.
-                        let different = similarity < DIFFERENT_BODY
-                            && link_shingles.len() >= MIN_SHINGLES
-                            && probe_shingles.len() >= MIN_SHINGLES;
-                        if !different {
+                    // A shared title over clearly different text is a site-wide title.
+                    let different = similarity < DIFFERENT_BODY
+                        && link_shingles.len() >= MIN_SHINGLES
+                        && probe_shingles.len() >= MIN_SHINGLES;
+                    let title_matched = !title.is_empty() && title == *probe_title && !different;
+                    let body_matched = similarity >= SIMILAR_BODY;
+                    if title_matched || body_matched {
+                        if needs_javascript(&text) {
                             return suspect_or_cant_tell(
-                                &text,
                                 &title,
                                 phrases,
-                                "probe: same title",
+                                "probe: page needs JavaScript",
                             );
                         }
-                    } else if similarity >= SIMILAR_BODY {
-                        return suspect_or_cant_tell(&text, &title, phrases, "probe: similar body");
+                        // The root answering like the probe on every matched signal means the
+                        // site serves one page for every URL.
+                        if let RootPage::Usable {
+                            title: root_title,
+                            shingles: root_shingles,
+                        } = &*self.root(fetcher, url).await
+                            && (!title_matched || root_title == probe_title)
+                            && (!body_matched
+                                || jaccard(root_shingles, probe_shingles) >= DIFFERENT_BODY)
+                        {
+                            return suspect_or_cant_tell(
+                                &title,
+                                phrases,
+                                "probe: every URL gets the same page",
+                            );
+                        }
+                        let reason = if title_matched {
+                            "probe: same title"
+                        } else {
+                            "probe: similar body"
+                        };
+                        return Soft404::Suspect(reason.to_owned());
                     }
                 }
             }
@@ -642,6 +672,36 @@ impl Probes {
             return Soft404::NoEvidence;
         }
         title_says_not_found(&title, phrases)
+    }
+
+    /// The root page of `url`'s origin, fetched by the first caller.
+    async fn root(&self, fetcher: &Fetcher, url: &Url) -> Arc<RootPage> {
+        let cell = {
+            let mut roots = self.roots.lock().expect("no code panics holding this lock");
+            Arc::clone(roots.entry(url.origin().ascii_serialization()).or_default())
+        };
+        let mut target = url.clone();
+        target.set_path("/");
+        target.set_query(None);
+        target.set_fragment(None);
+        let root = cell
+            .get_or_init(|| async {
+                let Ok(fetched) = fetcher.fetch(&target).await else {
+                    return Arc::new(RootPage::Unusable);
+                };
+                match fetched.chain.last() {
+                    Some(last) if (200..300).contains(&last.status) => {
+                        let text = String::from_utf8_lossy(&fetched.body);
+                        Arc::new(RootPage::Usable {
+                            title: title_of(&text),
+                            shingles: shingles(&text),
+                        })
+                    }
+                    _ => Arc::new(RootPage::Unusable),
+                }
+            })
+            .await;
+        Arc::clone(root)
     }
 
     /// The probe for `url`'s parent path, fetched by the first caller. A path ending in `/`
@@ -1987,6 +2047,18 @@ mod tests {
                 None,
             ),
             (
+                "root with the probe's title but unrelated text is no control",
+                vec![
+                    ("^/blog/gone$", page("Oops", &run("g", 200))),
+                    ("^/blog/[a-z0-9]{24}$", page("Oops", &run("g", 200))),
+                    ("^/$", page("Oops", &run("r", 200))),
+                ],
+                "",
+                "/blog/gone",
+                Some("probe: same title"),
+                None,
+            ),
+            (
                 "same title, different text, 20 shingles each",
                 vec![
                     ("^/t/a$", page("Shared", &run("a", 21))),
@@ -2131,6 +2203,23 @@ mod tests {
                 NO_PROBE,
                 "/z/a",
                 None,
+                None,
+            ),
+            (
+                "not-found title on a page that needs JavaScript stays suspect",
+                vec![
+                    (
+                        "^/z/a$",
+                        page("Not Found", "<p>Please enable JavaScript to continue</p>"),
+                    ),
+                    (
+                        "^/z/[a-z0-9]{24}$",
+                        page("Not Found", "<p>Please enable JavaScript to continue</p>"),
+                    ),
+                ],
+                "",
+                "/z/a",
+                Some("title says \"not found\""),
                 None,
             ),
             (
