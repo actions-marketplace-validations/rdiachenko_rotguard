@@ -38,13 +38,6 @@ jobs:
             echo "::error::rotguard failed (exit $CODE), see the Run rotguard --apply step"
           fi
           exit 1
-  notify:
-    needs: [fix]
-    if: always() && contains(needs.*.result, 'failure')
-    uses: ./.github/workflows/telegram-notify.yml
-    with:
-      title: "rotguard: weekly run failed"
-    secrets: inherit
 ```
 
 The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. A site on `@v0` (or `@v0.1.0`) on a Linux runner downloads a prebuilt binary in seconds. `@main` or a branch builds rotguard from source and keeps its compiled dependencies in the site repo's Actions cache; use it to try an unreleased change. A breaking release starts a new major tag, so `@v0` never jumps to 1.x. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
@@ -70,5 +63,5 @@ On exit 2 or higher, `--apply` may have written some files and not others, so no
 
 - Merging the PR changes only the sources. If your site deploys on a separate workflow, run it as usual.
 - A PR opened with `GITHUB_TOKEN` may hold the site's required checks until someone with write access clicks "Approve workflows to run".
-- The `notify` job calls a reusable workflow, `telegram-notify.yml`, that sends a message when the run fails. Point it at your own alert workflow, or drop the job: GitHub still emails the person who last edited the schedule when a scheduled run fails.
+- When a scheduled run fails, GitHub emails the person who last edited the schedule. For another alert (chat, pager), add a job with `needs: [fix]` and `if: failure()` that sends it.
 - Run it now with `gh workflow run rotguard.yml`.

@@ -330,21 +330,11 @@ fn action_s5_documented_workflow_has_the_agreed_shape() {
     assert!(script.contains("rotguard failed"), "{script}");
     assert!(script.trim_end().ends_with("exit 1"), "{script}");
 
-    let notify = &workflow["jobs"]["notify"];
-    assert_eq!(
-        notify["needs"].as_sequence().map(Vec::as_slice),
-        Some([Value::from("fix")].as_slice())
-    );
-    assert_eq!(
-        notify["if"].as_str(),
-        Some("always() && contains(needs.*.result, 'failure')")
-    );
-    assert_eq!(
-        notify["uses"].as_str(),
-        Some("./.github/workflows/telegram-notify.yml")
-    );
-    assert_eq!(
-        notify["with"]["title"].as_str(),
-        Some("rotguard: weekly run failed")
-    );
+    // The example must work when copied into any repo: no job calls a workflow file of its own.
+    for (name, job) in workflow["jobs"].as_mapping().expect("jobs is a mapping") {
+        assert!(
+            !job["uses"].as_str().is_some_and(|u| u.starts_with("./")),
+            "job {name:?} calls a local workflow"
+        );
+    }
 }
