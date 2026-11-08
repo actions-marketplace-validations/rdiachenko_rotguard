@@ -97,7 +97,6 @@ async fn s3_site_wide_title_over_different_pages_is_ok_without_a_root_request() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S4"]
 async fn s4_page_that_needs_javascript_is_unverifiable() {
     let w = World::new().await;
     let shell = page("App", "You need to enable JavaScript to run this app.");

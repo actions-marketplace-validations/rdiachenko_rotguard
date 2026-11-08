@@ -487,6 +487,7 @@ async fn check_one(
             chain: fetched.chain.clone(),
             reason,
         },
+        Soft404::CantTell(reason) => Verdict::Unverifiable { reason },
         Soft404::NoEvidence => verdict,
     }
 }
@@ -521,6 +522,8 @@ enum Soft404 {
     NoEvidence,
     /// The page looks like a soft 404, for this reason.
     Suspect(String),
+    /// The page matches the probe, but a page that needs JavaScript says nothing about the link.
+    CantTell(String),
 }
 
 /// `Suspect` when the page `title` contains one of the not-found `phrases`.
@@ -535,6 +538,36 @@ fn title_says_not_found(title: &str, phrases: &[String]) -> Soft404 {
                 .then(|| format!("title says \"{phrase}\""))
         })
         .map_or(Soft404::NoEvidence, Soft404::Suspect)
+}
+
+/// Phrases (lowercase, single-spaced) that say a page's content is built by JavaScript.
+const NEEDS_JAVASCRIPT: [&str; 4] = [
+    "enable javascript",
+    "javascript is required",
+    "requires javascript",
+    "javascript is disabled",
+];
+
+/// What a probe match (`reason`) means for a page: a not-found title still makes it a
+/// `Suspect`, a page that needs JavaScript is `CantTell`, anything else is `Suspect(reason)`.
+fn suspect_or_cant_tell(html: &str, title: &str, phrases: &[String], reason: &str) -> Soft404 {
+    if !needs_javascript(html) {
+        return Soft404::Suspect(reason.to_owned());
+    }
+    match title_says_not_found(title, phrases) {
+        found @ Soft404::Suspect(_) => found,
+        Soft404::NoEvidence | Soft404::CantTell(_) => {
+            Soft404::CantTell("probe: page needs JavaScript".to_owned())
+        }
+    }
+}
+
+/// Whether the page's visible text contains a needs-JavaScript phrase.
+fn needs_javascript(html: &str) -> bool {
+    let visible = visible_text(html);
+    NEEDS_JAVASCRIPT
+        .iter()
+        .any(|phrase| visible.contains(phrase))
 }
 
 /// Probes by (origin, parent path, whether the path ends in `/`); each cell is filled by the
@@ -592,10 +625,15 @@ impl Probes {
                             && link_shingles.len() >= MIN_SHINGLES
                             && probe_shingles.len() >= MIN_SHINGLES;
                         if !different {
-                            return Soft404::Suspect("probe: same title".to_owned());
+                            return suspect_or_cant_tell(
+                                &text,
+                                &title,
+                                phrases,
+                                "probe: same title",
+                            );
                         }
                     } else if similarity >= SIMILAR_BODY {
-                        return Soft404::Suspect("probe: similar body".to_owned());
+                        return suspect_or_cant_tell(&text, &title, phrases, "probe: similar body");
                     }
                 }
             }
@@ -745,11 +783,21 @@ fn find_opener(lower: &str, from: usize, opener: &str) -> (Option<usize>, usize)
     (None, lower.len() + 1)
 }
 
-/// The set of 3-word shingles of the page's visible, lowercased text.
-fn shingles(html: &str) -> HashSet<String> {
+/// The page's visible text: no comments, scripts, styles or tags, entities decoded, lowercased,
+/// whitespace collapsed to single spaces.
+fn visible_text(html: &str) -> String {
     let visible = strip_hidden(html);
     let visible = TAG.replace_all(&visible, " ");
-    let visible = decode_entities(&visible).to_lowercase();
+    decode_entities(&visible)
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The set of 3-word shingles of the page's visible, lowercased text.
+fn shingles(html: &str) -> HashSet<String> {
+    let visible = visible_text(html);
     let words: Vec<&str> = visible
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -1151,6 +1199,26 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, FetchError::Connect);
+    }
+
+    #[test]
+    fn needs_javascript_matches_visible_text_only() {
+        let cases = [
+            ("<p>You need to ENABLE   JavaScript to run this.</p>", true),
+            ("<noscript>Please enable\nJavaScript.</noscript>", true),
+            ("<p>JavaScript is required</p>", true),
+            ("<p>This site requires JavaScript.</p>", true),
+            ("<p>JavaScript is disabled in your browser</p>", true),
+            (
+                "<script>alert('enable javascript')</script><p>Hello</p>",
+                false,
+            ),
+            ("<!-- enable javascript --><p>Hello</p>", false),
+            ("<p>Nothing about scripts here</p>", false),
+        ];
+        for (html, expected) in cases {
+            assert_eq!(needs_javascript(html), expected, "{html}");
+        }
     }
 
     fn hop(status: u16, p: &str) -> Hop {
