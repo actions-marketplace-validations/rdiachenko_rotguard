@@ -483,11 +483,11 @@ async fn check_one(
         return verdict;
     };
     match probes.reason(fetcher, url, fetched, phrases).await {
-        Some(reason) => Verdict::Suspect {
+        Soft404::Suspect(reason) => Verdict::Suspect {
             chain: fetched.chain.clone(),
             reason,
         },
-        None => verdict,
+        Soft404::NoEvidence => verdict,
     }
 }
 
@@ -510,6 +510,29 @@ enum ProbeResult {
     Failed,
 }
 
+/// What the soft-404 checks found out about a 2xx link.
+#[derive(Debug, PartialEq, Eq)]
+enum Soft404 {
+    /// Nothing says the page is a soft 404.
+    NoEvidence,
+    /// The page looks like a soft 404, for this reason.
+    Suspect(String),
+}
+
+/// `Suspect` when the page `title` contains one of the not-found `phrases`.
+fn title_says_not_found(title: &str, phrases: &[String]) -> Soft404 {
+    let lowered = title.to_lowercase();
+    phrases
+        .iter()
+        .find_map(|phrase| {
+            let phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+            let phrase = phrase.to_lowercase();
+            (!phrase.is_empty() && lowered.contains(&phrase))
+                .then(|| format!("title says \"{phrase}\""))
+        })
+        .map_or(Soft404::NoEvidence, Soft404::Suspect)
+}
+
 /// Probes by (origin, parent path, whether the path ends in `/`); each cell is filled by the
 /// first check that needs it.
 type ProbeCache = HashMap<(String, String, bool), Arc<OnceCell<Arc<ProbeResult>>>>;
@@ -522,16 +545,18 @@ struct Probes {
 }
 
 impl Probes {
-    /// Why `url`, which ended in 2xx `fetched`, looks like a soft 404, if the probe or the
-    /// title says so. A non-root URL is probed first; the root has no probe.
+    /// Whether `url`, which ended in 2xx `fetched`, looks like a soft 404, by the probe or the
+    /// title. A non-root URL is probed first; the root has no probe.
     async fn reason(
         &self,
         fetcher: &Fetcher,
         url: &Url,
         fetched: &Fetched,
         phrases: &[String],
-    ) -> Option<String> {
-        let last = fetched.chain.last()?;
+    ) -> Soft404 {
+        let Some(last) = fetched.chain.last() else {
+            return Soft404::NoEvidence;
+        };
         let text = String::from_utf8_lossy(&fetched.body);
         let title = title_of(&text);
         let mut probe_status = None;
@@ -548,25 +573,24 @@ impl Probes {
                 // Only a 2xx probe is a page to compare with.
                 if (200..300).contains(status) {
                     if last.url == *final_url {
-                        return Some("probe: same final URL".to_owned());
+                        // A probe redirected to a link that was not itself redirected showed
+                        // the link's own page, which says nothing about a soft 404.
+                        if fetched.chain.len() > 1 {
+                            return Soft404::Suspect("probe: same final URL".to_owned());
+                        }
+                        return title_says_not_found(&title, phrases);
                     } else if !title.is_empty() && title == *probe_title {
-                        return Some("probe: same title".to_owned());
+                        return Soft404::Suspect("probe: same title".to_owned());
                     } else if jaccard(&shingles(&text), probe_shingles) >= SIMILAR_BODY {
-                        return Some("probe: similar body".to_owned());
+                        return Soft404::Suspect("probe: similar body".to_owned());
                     }
                 }
             }
         }
         if matches!(probe_status, Some(404 | 410)) {
-            return None;
+            return Soft404::NoEvidence;
         }
-        let lowered = title.to_lowercase();
-        phrases.iter().find_map(|phrase| {
-            let phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
-            let phrase = phrase.to_lowercase();
-            (!phrase.is_empty() && lowered.contains(&phrase))
-                .then(|| format!("title says \"{phrase}\""))
-        })
+        title_says_not_found(&title, phrases)
     }
 
     /// The probe for `url`'s parent path, fetched by the first caller. A path ending in `/`
@@ -1876,6 +1900,20 @@ mod tests {
                 "",
                 "/docs/real",
                 Some("probe: same final URL"),
+                None,
+            ),
+            (
+                "probe redirected to the unredirected link is no evidence",
+                vec![
+                    ("^/docs/real$", page("Docs home", "alpha beta gamma delta")),
+                    (
+                        "^/docs/[a-z0-9]{24}$",
+                        ResponseTemplate::new(302).insert_header("location", "/docs/real"),
+                    ),
+                ],
+                "",
+                "/docs/real",
+                None,
                 None,
             ),
             (

@@ -16,7 +16,6 @@ fn link_to(w: &World, path: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn s1_probe_redirected_to_the_link_is_no_evidence() {
     let w = World::new().await;
     w.serve(
@@ -43,7 +42,6 @@ async fn s1_probe_redirected_to_the_link_is_no_evidence() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn s2_redirected_link_ending_where_the_probe_ends_stays_suspect() {
     let w = World::new().await;
     let landing = redirect(302, &w.url("/docs/landing"));
