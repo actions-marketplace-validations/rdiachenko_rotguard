@@ -6,6 +6,12 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-08
+
+- The action is named "rotguard link checker & fixer" so it can be listed on the GitHub
+  Marketplace, where the name "rotguard" is taken by a user account. `uses: rdiachenko/rotguard@v0`
+  is unchanged.
+
 ## [0.1.0] - 2026-11-08
 
 First public release.

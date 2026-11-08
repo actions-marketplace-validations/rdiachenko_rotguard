@@ -1,5 +1,5 @@
-name: rotguard
-description: Check a markdown site's links and write the safe fixes with rotguard --apply.
+name: rotguard link checker & fixer
+description: Link checker that fixes what it finds, rewriting redirected and dead links in a markdown site.
 branding:
   icon: shield
   color: blue

@@ -22,7 +22,7 @@ On Linux, download a static binary from the
 and `arch` to `x86_64` or `aarch64`:
 
 ```sh
-v=0.1.0 arch=x86_64
+v=0.1.1 arch=x86_64
 curl -fsSLo rotguard "https://github.com/rdiachenko/rotguard/releases/download/v$v/rotguard-$v-$arch-unknown-linux-musl"
 chmod +x rotguard && sudo mv rotguard /usr/local/bin/
 ```
