@@ -6,6 +6,12 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+- Fewer false soft-404s on sites unlike a personal blog:
+  - A link is no longer suspect when the made-up probe URL redirects to the link itself, as on
+    sites that find an article by its ID and ignore the rest of the URL.
+  - A shared `<title>` no longer makes a link suspect when the two pages' text differs.
 - A link that looks like a soft-404 is now `UNVERIFIABLE` instead of suspect when the host's root
   gets the same page as the probe (`probe: every URL gets the same page`) or the page asks for
   JavaScript (`probe: page needs JavaScript`). Detection may GET a host's root once.
