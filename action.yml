@@ -3,6 +3,11 @@ description: Link checker that fixes what it finds, rewriting redirected and dea
 branding:
   icon: shield
   color: blue
+inputs:
+  path:
+    description: Site directory with rotguard.toml, relative to the workspace root.
+    required: false
+    default: "."
 outputs:
   exit-code:
     description: rotguard's exit code. 0 or 1 mean the fixes are complete (1 means some links need a hand fix); any other code means a failed run.
@@ -79,10 +84,12 @@ runs:
     - id: run
       name: Run rotguard --apply
       shell: bash
+      env:
+        ROTGUARD_PATH: ${{ inputs.path }}
       run: |
         report_file="$RUNNER_TEMP/rotguard-report.md"
         set +e
-        "$GITHUB_ACTION_PATH/target/release/rotguard" --apply --format markdown > "$report_file"
+        "$GITHUB_ACTION_PATH/target/release/rotguard" --apply --format markdown -- "${ROTGUARD_PATH:-.}" > "$report_file"
         code=$?
         set -e
         cat "$report_file"

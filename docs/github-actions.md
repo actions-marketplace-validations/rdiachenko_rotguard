@@ -42,6 +42,42 @@ jobs:
 
 The job reads the action's outputs `exit-code` and `report`; the action also writes the report to the job summary. A site on `@v0` (or `@v0.1.0`) on a Linux runner downloads a prebuilt binary in seconds. `@main` or a branch builds rotguard from source and keeps its compiled dependencies in the site repo's Actions cache; use it to try an unreleased change. A breaking release starts a new major tag, so `@v0` never jumps to 1.x. The PR is rebuilt from `main` on every run, so an open PR is updated, not duplicated.
 
+## Site in a subfolder
+
+If the site lives in a subfolder of the repo, set the action's `path` input to it, relative to the repo root. It defaults to `.`. This workflow checks a site in `web/site`:
+
+```yaml
+name: rotguard
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency: rotguard
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - id: rotguard
+        uses: rdiachenko/rotguard@v0
+        with:
+          path: web/site
+      - if: steps.rotguard.outputs.exit-code == '0' || steps.rotguard.outputs.exit-code == '1'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          branch: rotguard/fixes
+          delete-branch: true
+          title: Fix rotted links
+          commit-message: Fix rotted links
+          body-path: ${{ steps.rotguard.outputs.report }}
+```
+
+`web/site` needs its own `rotguard.toml`. Keep the exit-code step from the first workflow if you want the job to fail when a link needs a hand fix.
+
 ## One setting
 
 In the site repo: Settings, Actions, General, Workflow permissions, "Allow GitHub Actions to create and approve pull requests". Without it the PR step fails.

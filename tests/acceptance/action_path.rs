@@ -105,7 +105,6 @@ async fn run_in(workspace: PathBuf, path: &str) -> Step {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S11"]
 async fn s11_run_step_works_on_a_subfolder() {
     let w = World::new().await;
     w.serve(
@@ -141,7 +140,6 @@ async fn s11_run_step_works_on_a_subfolder() {
 }
 
 #[test]
-#[ignore = "pending: S12"]
 fn s12_action_declares_the_path_input_and_keeps_it_out_of_scripts() {
     let action = action();
 
@@ -206,7 +204,6 @@ fn rotguard_steps(workflow: &Value) -> Vec<&Value> {
 }
 
 #[test]
-#[ignore = "pending: S13"]
 fn s13_docs_show_a_monorepo_workflow() {
     let docs = read_repo_file("docs/github-actions.md");
     let workflows: Vec<Value> = yaml_blocks(&docs)
