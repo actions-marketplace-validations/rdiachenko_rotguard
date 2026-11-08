@@ -28,10 +28,3 @@ A failure before publishing leaves no release and `v<major>` where it was. Delet
 release is final (immutable releases): fix forward with the next patch version. A run that fails
 after publishing leaves the release in place; move `v<major>` by hand with
 `git tag -f v<major> <sha> && git push -f origin v<major>`.
-
-### Check at the next release
-
-`v0` has been pushed once, at v0.1.0. After the next release, check that
-`git ls-remote --tags origin v0` points at it: that confirms `v0` can still be force-pushed with
-immutable releases on. If it can't, make `v0` a branch that each release fast-forwards; sites
-don't change. Then delete this section.

@@ -392,7 +392,7 @@ reads its certificates from the keychain, not these variables.
   ref that doesn't match the tag pattern builds (R6).
 - probed: with `SSL_CERT_FILE` and `SSL_CERT_DIR` pointing at an empty folder, the static binary
   panics at `src/check.rs:104` and exits 101, so S14 reproduces the missing-bundle case.
-- unverified — fallback in D4: `v0` stays force-pushable with immutable releases on.
+- probed: `v0` stays force-pushable with immutable releases on: the v0.1.1 release moved it.
 - probed: `if:` on a composite step reading `steps.fetch.outputs.mode` works: the same run
   skipped the key, cache, build and save steps.
 
