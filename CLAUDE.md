@@ -22,6 +22,9 @@ adds.
 6. `gh run watch` until the release run ends.
 7. `gh release view vX.Y.Z` shows 3 assets: the 2 binaries and `SHA256SUMS`. Check that
    `git ls-remote --tags origin v<major>` shows the new commit.
+8. Ask the user to list the release on the GitHub Marketplace: on the release page, Edit, tick
+   "Publish this action to the GitHub Marketplace", Update release. Publishing with `gh` can't
+   tick it, and only the repo owner can.
 
 A failure before publishing leaves no release and `v<major>` where it was. Delete the tag with
 `git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`, fix the cause, and tag again. A published
