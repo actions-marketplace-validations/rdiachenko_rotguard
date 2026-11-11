@@ -640,7 +640,12 @@ fn without_tracking(fix: &Url, link: &Url) -> Option<Url> {
         return None;
     }
     let mut stripped = fix.clone();
-    stripped.set_query((!kept.is_empty()).then(|| kept.join("&")).as_deref());
+    stripped.set_query(
+        kept.iter()
+            .any(|p| !p.is_empty())
+            .then(|| kept.join("&"))
+            .as_deref(),
+    );
     Some(stripped)
 }
 
@@ -1704,6 +1709,9 @@ mod tests {
             ("/n?UTM_Source=o", "/o", Some("/n")),
             ("/n?q=a%20b&utm_x=1&r=%7E", "/o", Some("/n?q=a%20b&r=%7E")),
             ("/n?%75tm_source=o&a=1", "/o", Some("/n?a=1")),
+            ("/n?&utm_source=o", "/o", Some("/n")),
+            ("/n?utm_source=o&", "/o", Some("/n")),
+            ("/n?id=7&utm_x=1&", "/o", Some("/n?id=7&")),
             ("/n?id=7&ref=x", "/o", None),
             ("/n", "/o", None),
         ];
