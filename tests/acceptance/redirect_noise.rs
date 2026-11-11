@@ -501,7 +501,6 @@ async fn redirect_noise_s18_noise_after_the_root_is_suspect() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S19"]
 async fn redirect_noise_s19_added_utm_pairs_are_stripped_with_proof() {
     let w = World::new().await;
     awin_site(&w).await;
@@ -535,7 +534,6 @@ async fn redirect_noise_s19_added_utm_pairs_are_stripped_with_proof() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S20"]
 async fn redirect_noise_s20_utm_pair_the_link_has_stays() {
     let w = World::new().await;
     w.serve(
@@ -562,7 +560,6 @@ async fn redirect_noise_s20_utm_pair_the_link_has_stays() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S21"]
 async fn redirect_noise_s21_other_pairs_stay_byte_for_byte() {
     let w = World::new().await;
     w.serve(
@@ -585,7 +582,6 @@ async fn redirect_noise_s21_other_pairs_stay_byte_for_byte() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S22"]
 async fn redirect_noise_s22_stripped_url_with_a_noise_first_step_counts_as_ok() {
     let w = World::new().await;
     w.serve(
@@ -609,7 +605,6 @@ async fn redirect_noise_s22_stripped_url_with_a_noise_first_step_counts_as_ok() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S23"]
 async fn redirect_noise_s23_stripped_url_404_keeps_the_link() {
     let w = World::new().await;
     w.serve(
@@ -633,7 +628,6 @@ async fn redirect_noise_s23_stripped_url_404_keeps_the_link() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S24"]
 async fn redirect_noise_s24_stripped_url_redirecting_elsewhere_keeps_the_link() {
     let w = World::new().await;
     let elsewhere = w.url("/elsewhere");
@@ -659,7 +653,6 @@ async fn redirect_noise_s24_stripped_url_redirecting_elsewhere_keeps_the_link() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S25"]
 async fn redirect_noise_s25_different_title_keeps_the_link() {
     let w = World::new().await;
     w.serve(
@@ -683,7 +676,6 @@ async fn redirect_noise_s25_different_title_keeps_the_link() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S26"]
 async fn redirect_noise_s26_stripped_url_timeout_keeps_the_link_without_retry() {
     let mut w = World::new().await;
     w.configure(|s| s.timeout_ms = Some(300));
@@ -704,7 +696,6 @@ async fn redirect_noise_s26_stripped_url_timeout_keeps_the_link_without_retry() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S27"]
 async fn redirect_noise_s27_deadline_during_the_strip_is_unverifiable() {
     let mut w = World::new().await;
     w.configure(|s| {
@@ -722,7 +713,6 @@ async fn redirect_noise_s27_deadline_during_the_strip_is_unverifiable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S28"]
 async fn redirect_noise_s28_strip_runs_with_soft404_off() {
     let mut w = World::new().await;
     w.configure(|s| s.no_soft404_hosts = vec!["127.0.0.1".to_owned()]);
@@ -828,7 +818,6 @@ async fn redirect_noise_s32_fix_without_utm_pairs_sends_no_strip_request() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S33"]
 async fn redirect_noise_s33_fragment_survives_a_strip() {
     let w = World::new().await;
     awin_site(&w).await;

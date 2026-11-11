@@ -600,7 +600,7 @@ async fn check_one(
                 Verdict::Ok { .. } | Verdict::Permanent { .. } | Verdict::Temporary { .. }
             ),
     ) else {
-        return verdict;
+        return drop_added_tracking(fetcher, url, &outcome, verdict).await;
     };
     match probes.reason(fetcher, url, fetched, phrases).await {
         Soft404::Suspect(reason) => Verdict::Suspect {
@@ -608,7 +608,74 @@ async fn check_one(
             reason,
         },
         Soft404::CantTell(reason) => Verdict::Unverifiable { reason },
-        Soft404::NoEvidence => verdict,
+        Soft404::NoEvidence => drop_added_tracking(fetcher, url, &outcome, verdict).await,
+    }
+}
+
+/// Query keys that start with one of these (ASCII case ignored) are tracking noise.
+const TRACKING_PREFIXES: &[&str] = &["utm_"];
+
+/// The fix without the tracking pairs a redirect added, or `None` when none was added. A pair
+/// is dropped when its decoded key starts with a `TRACKING_PREFIXES` entry and is no decoded
+/// key of the link's query; the other pairs stay byte for byte.
+fn without_tracking(fix: &Url, link: &Url) -> Option<Url> {
+    let query = fix.query()?;
+    let own: HashSet<_> = link
+        .query_pairs()
+        .map(|(key, _)| key.into_owned())
+        .collect();
+    let is_added = |piece: &&str| {
+        let raw_key = piece.split_once('=').map_or(*piece, |(key, _)| key);
+        let key = url::form_urlencoded::parse(raw_key.as_bytes())
+            .next()
+            .map_or_else(String::new, |(key, _)| key.into_owned());
+        let key_lower = key.to_ascii_lowercase();
+        TRACKING_PREFIXES
+            .iter()
+            .any(|prefix| key_lower.starts_with(prefix))
+            && !own.contains(&key)
+    };
+    let kept: Vec<&str> = query.split('&').filter(|p| !is_added(p)).collect();
+    if kept.len() == query.split('&').count() {
+        return None;
+    }
+    let mut stripped = fix.clone();
+    stripped.set_query((!kept.is_empty()).then(|| kept.join("&")).as_deref());
+    Some(stripped)
+}
+
+/// The last step for a `Permanent` verdict built from `outcome`: fetch the fix without the
+/// tracking pairs once, with no retry and no soft-404 probe. The fix becomes that URL when it
+/// classifies `Ok` and ends on a page with the same title as the link's; in every other case
+/// the link is `Ok`, keeping its own chain. Any other verdict is returned as it is.
+async fn drop_added_tracking(
+    fetcher: &Fetcher,
+    url: &Url,
+    outcome: &Result<Fetched, FetchError>,
+    verdict: Verdict,
+) -> Verdict {
+    let (Ok(fetched), Verdict::Permanent { chain, fix }) = (outcome, &verdict) else {
+        return verdict;
+    };
+    let Some(stripped) = without_tracking(fix, url) else {
+        return verdict;
+    };
+    let result = fetcher.fetch(&stripped).await;
+    let title = |f: &Fetched| title_of(&String::from_utf8_lossy(&f.body));
+    if let Ok(f) = &result
+        && matches!(
+            classify(&result, &HostConfig::default()),
+            Verdict::Ok { .. }
+        )
+        && title(f) == title(fetched)
+    {
+        return Verdict::Permanent {
+            chain: chain.clone(),
+            fix: stripped,
+        };
+    }
+    Verdict::Ok {
+        chain: fetched.chain.clone(),
     }
 }
 
@@ -1621,6 +1688,30 @@ mod tests {
             "",
         ] {
             assert!(!locale_shaped(segment), "rejects {segment:?}");
+        }
+    }
+
+    #[test]
+    fn without_tracking_drops_only_added_tracking_pairs() {
+        let cases = [
+            ("/n?utm_medium=r&utm_source=o", "/o", Some("/n")),
+            ("/n?id=7&utm_source=old&ref=x", "/o", Some("/n?id=7&ref=x")),
+            (
+                "/n?utm_source=mine&utm_medium=r",
+                "/o?utm_source=mine",
+                Some("/n?utm_source=mine"),
+            ),
+            ("/n?UTM_Source=o", "/o", Some("/n")),
+            ("/n?q=a%20b&utm_x=1&r=%7E", "/o", Some("/n?q=a%20b&r=%7E")),
+            ("/n?%75tm_source=o&a=1", "/o", Some("/n?a=1")),
+            ("/n?id=7&ref=x", "/o", None),
+            ("/n", "/o", None),
+        ];
+        for (fix, link, want) in cases {
+            let fix = Url::parse(&format!("https://m.example{fix}")).unwrap();
+            let link = Url::parse(&format!("https://m.example{link}")).unwrap();
+            let want = want.map(|p| Url::parse(&format!("https://m.example{p}")).unwrap());
+            assert_eq!(without_tracking(&fix, &link), want, "{fix} from {link}");
         }
     }
 
