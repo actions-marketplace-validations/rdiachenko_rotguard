@@ -6,6 +6,8 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
 - A permanent redirect that only adds query parameters or a locale path segment (`/en-gb/`) no
   longer rewrites the link: it stays as written and counts as `OK`, so a report-only run whose
   only findings were such redirects now exits 0.
