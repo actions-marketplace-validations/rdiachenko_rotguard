@@ -274,7 +274,8 @@ pub enum Verdict {
     Ok {
         chain: Vec<Hop>,
     },
-    /// Moved for good; `fix` is the target of the last 301/308 in the leading run.
+    /// Moved for good; `fix` is the URL reached after the last step before the leading 301/308
+    /// run's first noise step, or the end of the run when no step is noise.
     Permanent {
         chain: Vec<Hop>,
         fix: Url,
@@ -340,12 +341,80 @@ fn no_location_reason(chain: &[Hop]) -> String {
     )
 }
 
+/// Whether a path segment looks like a locale: 2 letters, optionally followed by `-` or `_` and
+/// 2 letters, 4 letters or 3 digits.
+fn locale_shaped(segment: &str) -> bool {
+    let letters = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_alphabetic());
+    match segment.split_once(['-', '_']) {
+        None => letters(segment, 2),
+        Some((lang, region)) => {
+            letters(lang, 2)
+                && (letters(region, 2)
+                    || letters(region, 4)
+                    || (region.len() == 3 && region.bytes().all(|b| b.is_ascii_digit())))
+        }
+    }
+}
+
+/// Decoded query pairs with their counts.
+fn query_counts(url: &Url) -> HashMap<(String, String), usize> {
+    let mut counts = HashMap::new();
+    for (key, value) in url.query_pairs() {
+        *counts
+            .entry((key.into_owned(), value.into_owned()))
+            .or_insert(0) += 1;
+    }
+    counts
+}
+
+/// Path segments with 1 trailing empty segment dropped, so `/` is empty and `/a/` equals `/a`.
+fn path_list(url: &Url) -> Vec<&str> {
+    let mut segments: Vec<&str> = url.path_segments().map_or_else(Vec::new, Iterator::collect);
+    if segments.last() == Some(&"") {
+        segments.pop();
+    }
+    segments
+}
+
+/// Whether a redirect from `from` to `to` only adds noise: the same origin, every decoded query
+/// pair of `from` kept (order ignored, fragments ignored), and a path that is identical, that
+/// gains 1 locale-shaped segment, or that differs by a trailing slash while a pair is added.
+fn is_noise(from: &Url, to: &Url) -> bool {
+    if from.origin() != to.origin() {
+        return false;
+    }
+    let (from_pairs, to_pairs) = (query_counts(from), query_counts(to));
+    if from_pairs
+        .iter()
+        .any(|(pair, n)| to_pairs.get(pair).is_none_or(|m| m < n))
+    {
+        return false;
+    }
+    if from.path() == to.path() {
+        return true;
+    }
+    let (from_path, to_path) = (path_list(from), path_list(to));
+    if from_path == to_path {
+        return to_pairs.values().sum::<usize>() > from_pairs.values().sum::<usize>();
+    }
+    to_path.len() == from_path.len() + 1
+        && (0..to_path.len()).any(|i| {
+            to_path[..i] == from_path[..i]
+                && to_path[i + 1..] == from_path[i..]
+                && locale_shaped(to_path[i])
+        })
+}
+
 /// Classifies a fetch outcome by its status and redirect chain.
 ///
 /// A non-root URL is a soft-404 suspect, unless `host` turns soft-404 detection off, when its
 /// 2xx chain ends at the site root or its leading 301/308 run does; any other chain is suspect
 /// when it fails or ends in an unexplained status after passing through the root. A middle root
 /// hop in a chain that ends elsewhere doesn't count.
+///
+/// A 2xx chain whose leading 301/308 run starts with a noise step (see `is_noise`) is `Ok`. When
+/// the run starts with real steps, the fix is the URL reached after them, before the first noise
+/// step, or the end of the run when none is noise.
 #[must_use]
 pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Verdict {
     let unverifiable = |reason: String| Verdict::Unverifiable { reason };
@@ -386,21 +455,31 @@ pub fn classify(outcome: &Result<Fetched, FetchError>, host: &HostConfig) -> Ver
         }
         200..=299 => {
             let leading = permanent_run(chain);
+            // The run ends in a 2xx response, so every step of it has a next hop.
+            let clean = chain
+                .windows(2)
+                .take(leading)
+                .take_while(|step| !is_noise(&step[0].url, &step[1].url))
+                .count();
             let is_root = |hop: &Hop| hop.url.path() == "/";
             if host.soft404
                 && !is_root(&chain[0])
-                && (is_root(last) || (leading > 0 && is_root(&chain[leading])))
+                && (is_root(last)
+                    || (leading > 0 && is_root(&chain[leading]))
+                    || (clean > 0 && is_root(&chain[clean])))
             {
                 Verdict::Suspect {
                     chain: chain.clone(),
                     reason: "redirect to root".to_owned(),
                 }
+            } else if leading > 0 && clean == 0 {
+                Verdict::Ok {
+                    chain: chain.clone(),
+                }
             } else if leading > 0 {
-                // The run ends in a 2xx response, so a next hop exists.
-                let fix = chain[leading].url.clone();
                 Verdict::Permanent {
                     chain: chain.clone(),
-                    fix,
+                    fix: chain[clean].url.clone(),
                 }
             } else if matches!(chain[0].status, 302 | 303 | 307) {
                 Verdict::Temporary {
@@ -1525,6 +1604,112 @@ mod tests {
     type RootCase<'a> = (&'a str, Result<Fetched, FetchError>, bool, Expect);
 
     #[test]
+    fn locale_shaped_accepts_only_locale_segments() {
+        for segment in ["en", "DE", "en-gb", "en_US", "pt-BR", "zh-Hans", "es-419"] {
+            assert!(locale_shaped(segment), "accepts {segment}");
+        }
+        for segment in [
+            "eng",
+            "e",
+            "v2",
+            "en-",
+            "en-g",
+            "en-gbr",
+            "zh-Hans-CN",
+            "plans",
+            "Reference",
+            "",
+        ] {
+            assert!(!locale_shaped(segment), "rejects {segment:?}");
+        }
+    }
+
+    #[test]
+    fn is_noise_follows_the_design_table() {
+        let cases = [
+            ("/a", "/a?x=1", true),
+            ("/a?b=1&a=2", "/a?a=2&b=1", true),
+            ("/a", "/a#top", true),
+            ("/a", "/a/?x=1", true),
+            ("/a", "/a/", false),
+            ("/a?id=5", "/a?id=6", false),
+            ("/n/x/", "/en-gb/n/x", true),
+            ("/n/x", "/n/x/de", true),
+            ("/", "/en-gb/", true),
+            ("/n/x", "/en/gb/n/x", false),
+            ("/n/x", "/en/n/y", false),
+            ("/en/x", "/en-US/x", false),
+            ("/help/en/a", "/help/a", false),
+            ("/docs/x", "/docs/Reference/x", false),
+            ("/n/x?a=1", "/de/n/x?a=1&l=de", true),
+            ("/a?x=1&x=1", "/a?x=1", false),
+        ];
+        for (from, to, noise) in cases {
+            let from = Url::parse(&format!("https://m.example{from}")).unwrap();
+            let to = Url::parse(&format!("https://m.example{to}")).unwrap();
+            assert_eq!(is_noise(&from, &to), noise, "{from} -> {to}");
+        }
+        let http = Url::parse("http://m.example/a").unwrap();
+        let https = Url::parse("https://m.example/a?x=1").unwrap();
+        assert!(!is_noise(&http, &https), "scheme differs");
+    }
+
+    #[test]
+    fn noise_steps_shape_the_classified_fix() {
+        let cases = [
+            (
+                "a noise first step is kept",
+                vec![hop_at("/a", 301), hop_at("/a?language=en", 200)],
+                true,
+                Verdict::Ok {
+                    chain: vec![hop_at("/a", 301), hop_at("/a?language=en", 200)],
+                },
+            ),
+            (
+                "a real step then a noise step fixes to the middle url",
+                vec![
+                    hop_at("/old/x", 301),
+                    hop_at("/new/x", 301),
+                    hop_at("/new/x?language=en", 200),
+                ],
+                true,
+                Verdict::Permanent {
+                    chain: vec![
+                        hop_at("/old/x", 301),
+                        hop_at("/new/x", 301),
+                        hop_at("/new/x?language=en", 200),
+                    ],
+                    fix: hop_at("/new/x", 301).url,
+                },
+            ),
+            (
+                "a real step to the root before a noise step is suspect",
+                vec![
+                    hop_at("/promo", 301),
+                    hop_at("/", 301),
+                    hop_at("/en-gb/", 200),
+                ],
+                true,
+                Verdict::Suspect {
+                    chain: vec![
+                        hop_at("/promo", 301),
+                        hop_at("/", 301),
+                        hop_at("/en-gb/", 200),
+                    ],
+                    reason: "redirect to root".to_owned(),
+                },
+            ),
+        ];
+        for (name, chain, soft404, expected) in cases {
+            assert_eq!(
+                classify(&chain_of(chain), &HostConfig { soft404 }),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn redirects_to_the_root_classify_by_soft404_and_final_status() {
         let loop_chain = || vec![deep_hop(301), root_hop(301)];
         let cases: Vec<RootCase> = vec![
@@ -1550,7 +1735,9 @@ mod tests {
                 "a root url redirected to the root is unaffected",
                 chain_of(vec![root_hop(301), root_hop(200)]),
                 true,
-                Expect::Permanent(root_hop(200).url),
+                Expect::Is(Verdict::Ok {
+                    chain: vec![root_hop(301), root_hop(200)],
+                }),
             ),
             (
                 "ending in 404 stays dead",

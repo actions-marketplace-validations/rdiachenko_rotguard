@@ -111,7 +111,6 @@ async fn slow_strip_site(w: &World, delay: Duration) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S1"]
 async fn redirect_noise_s1_added_parameter_is_kept_with_2_requests() {
     let w = World::new().await;
     w.serve(Routes::new().with(
@@ -133,7 +132,6 @@ async fn redirect_noise_s1_added_parameter_is_kept_with_2_requests() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S2"]
 async fn redirect_noise_s2_added_parameter_next_to_own_query_is_kept() {
     let w = World::new().await;
     w.serve(Routes::new().with(
@@ -154,7 +152,6 @@ async fn redirect_noise_s2_added_parameter_next_to_own_query_is_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S3"]
 async fn redirect_noise_s3_reordered_parameters_with_additions_are_kept() {
     let w = World::new().await;
     w.serve(Routes::new().with(
@@ -221,7 +218,6 @@ async fn redirect_noise_s5_dropped_parameter_is_rewritten() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S6"]
 async fn redirect_noise_s6_locale_segment_with_slash_change_is_kept() {
     let w = World::new().await;
     w.serve(
@@ -338,7 +334,6 @@ async fn redirect_noise_s10_added_trailing_slash_alone_is_rewritten() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S11"]
 async fn redirect_noise_s11_locale_segment_in_the_middle_is_kept() {
     let w = World::new().await;
     w.serve(
@@ -359,7 +354,6 @@ async fn redirect_noise_s11_locale_segment_in_the_middle_is_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S12"]
 async fn redirect_noise_s12_root_to_locale_root_is_kept() {
     let w = World::new().await;
     w.serve(
@@ -377,7 +371,6 @@ async fn redirect_noise_s12_root_to_locale_root_is_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S13"]
 async fn redirect_noise_s13_script_subtag_locale_is_kept() {
     let w = World::new().await;
     w.serve(
@@ -414,7 +407,6 @@ async fn redirect_noise_s14_three_letter_segment_is_a_real_move() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S15"]
 async fn redirect_noise_s15_trailing_slash_with_added_parameter_is_kept() {
     let w = World::new().await;
     w.serve(
@@ -432,7 +424,6 @@ async fn redirect_noise_s15_trailing_slash_with_added_parameter_is_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S16"]
 async fn redirect_noise_s16_real_move_then_noise_is_rewritten_before_the_noise() {
     let w = World::new().await;
     w.serve(
@@ -464,7 +455,6 @@ async fn redirect_noise_s16_real_move_then_noise_is_rewritten_before_the_noise()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S17"]
 async fn redirect_noise_s17_noise_then_real_step_is_kept() {
     let w = World::new().await;
     w.serve(
@@ -492,7 +482,6 @@ async fn redirect_noise_s17_noise_then_real_step_is_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S18"]
 async fn redirect_noise_s18_noise_after_the_root_is_suspect() {
     let w = World::new().await;
     w.serve(
@@ -774,7 +763,6 @@ async fn redirect_noise_s29_soft_404_checks_still_run_on_noise() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S30"]
 async fn redirect_noise_s30_kept_link_is_not_a_finding_under_strict() {
     let w = World::new().await;
     w.serve(Routes::new().with(
@@ -803,7 +791,6 @@ async fn redirect_noise_s30_kept_link_is_not_a_finding_under_strict() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "pending: S31"]
 async fn redirect_noise_s31_utm_noise_from_the_link_is_kept_with_2_requests() {
     let w = World::new().await;
     w.serve(Routes::new().with(
