@@ -70,7 +70,8 @@ and `ManualReason` types every other module passes around. `main.rs` only parses
 `check.rs` owns the network and the verdicts. `Fetcher` sends GET requests politely: 1 in
 flight per host, spaced starts, at most 8 hosts at once, redirects followed by hand up to 10.
 `classify` turns a fetch into a `Verdict` (`Ok`, `Permanent`, `Temporary`, `Dead`, `Suspect`,
-`Unverifiable`, `Blocked`). `check_all` checks every distinct URL with retries, re-checks a first
+`Unverifiable`, `Blocked`); a `Permanent` fix points at the URL before the first noise step of
+the leading 301/308 run. `check_all` checks every distinct URL with retries, re-checks a first
 `Dead`, runs the soft-404 and bot-wall probes and stops at the deadline. It never writes.
 
 `apply.rs` is the only module that writes files, a rule a fitness check in `.whittle/gates.toml`
@@ -115,7 +116,8 @@ Outside `src/`, `action.yml` is a composite GitHub Action with 6 steps:
 4. Look up a snapshot for each dead or suspect link at its page's date (the run date when the
    page has none). Dead links go first, sorted by URL then date, then suspects, so a deadline
    cuts off suspect lookups before dead ones.
-5. Build 1 finding per occurrence: a permanent redirect proposes its target, dead and suspect
+5. Build 1 finding per occurrence: a permanent redirect proposes the URL before its first noise
+   step (without the `utm_*` pairs the redirect added), dead and suspect
    propose the snapshot, temporary, unverifiable and blocked propose nothing.
 6. With `--apply`, apply the fixes. Print the report; exit 1 if a dead, permanent or suspect
    link is left unfixed (with `--strict`, also temporary, unverifiable and blocked), else 0.
@@ -151,6 +153,17 @@ For a 2xx link whose probe also answered 2xx, 3 comparisons run in order:
       alike), the host gives every URL the same page: `Unverifiable` (`probe: every URL gets the
       same page`).
    4. Otherwise the link is `Suspect` (`probe: same title` or `probe: similar body`).
+
+**Permanent fixes**: a step of a 301/308 run is noise when it keeps the origin and every query
+pair of the URL before it, and then adds a query pair, adds 1 locale-shaped path segment (`en`,
+`en-gb`, `pt-BR`, `zh-Hans`, `es-419`) or changes nothing but a trailing slash while adding a
+pair. A run whose first step is noise leaves the link `Ok`, as written. Otherwise the fix is the
+URL before the first noise step, so `/old` to `/new` to `/new?language=en_US` is rewritten to
+`/new`. A fix that would be the site root for a link that isn't is `SUSPECT redirect to root`.
+Last, `check_one` drops the `utm_*` pairs the redirect added, keeping any the link had, and
+sends 1 GET for the stripped URL, with no retry and no probe. The strip stands only when that
+URL classifies `Ok` and its `<title>` matches the page the link ended on; any other result keeps
+the link `Ok`, unchanged.
 
 **Apply** (`--apply`, after the check): per file, re-read it and confirm each finding's span
 still holds its original URL, then write `<file>.rotguard.tmp` and rename it over the file. A
@@ -206,12 +219,19 @@ the compiled build in the site repo's Actions cache under
   everything, or whose root 404s, is reported as unverifiable too.
   `tests/acceptance/soft404.rs`, `blocked.rs`, `directory_probe.rs`, `root_redirect.rs` and
   `foreign_sites.rs` hold the agreed cases.
+- **The noise rule.** A locale segment can follow the machine that runs the check
+  (`/en-gb/` from a UK laptop, `/en-us/` from the GitHub runner), so writing it into a file
+  breaks the link for other readers. But a rule that is too loose keeps a real move as written.
+  So a step is noise only when the origin and every query pair stay and the path gains 1
+  locale-shaped segment or a pair is added; any other segment, a changed id or a lost pair is a
+  real step. A wrong call keeps a link as written or stops a fix 1 step early, and writes
+  nothing that wasn't reached. `tests/acceptance/redirect_noise.rs` holds the agreed cases.
 
 ## Decisions
 
 - Report by default; `--apply` writes only fixes that can't be wrong: permanent-redirect targets
-  and snapshots for dead links, never suspects or unverifiable links
-  (`docs/design/link-health.md`, D1, D6).
+  that carry no noise and snapshots for dead links, never suspects or unverifiable links
+  (`docs/design/link-health.md`, D1, D6; `docs/design/redirect-noise.md`, D1, D3).
 - `--apply` rewrites only markdown link destinations and TOML front-matter strings; YAML, raw
   HTML and bare URLs are reported as `manual fix: not verbatim` (`docs/design/simplify.md`, D1, D3).
 - A dead link's fix is the snapshot closest to the page's date (`docs/design/link-health.md`, D2).
