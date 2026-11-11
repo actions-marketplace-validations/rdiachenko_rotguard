@@ -24,7 +24,7 @@ On Linux, download a static binary from the
 and `arch` to `x86_64` or `aarch64`:
 
 ```sh
-v=0.2.1 arch=x86_64
+v=0.3.0 arch=x86_64
 curl -fsSLo rotguard "https://github.com/rdiachenko/rotguard/releases/download/v$v/rotguard-$v-$arch-unknown-linux-musl"
 chmod +x rotguard && sudo mv rotguard /usr/local/bin/
 ```
@@ -96,7 +96,7 @@ checked 87: ok 84, permanent 1, temporary 1, dead 1, suspect 0, unverifiable 0, 
 
 | Class | Meaning | Fix |
 |---|---|---|
-| `PERMANENT REDIRECT` | 301/308 to a live page | the redirect target |
+| `PERMANENT REDIRECT` | 301/308 to a live page at another address; a redirect that only adds query parameters or a locale path segment (`/en-gb/`) is OK | the redirect target, without `utm_*` parameters the redirect added |
 | `DEAD` | 404, 410 or a host DNS says doesn't exist, on two tries, on a host whose home page doesn't answer 404 or 410 too | the snapshot closest to the page's date |
 | `SUSPECT` | looks like a soft-404, e.g. redirected to the site's home page | a snapshot, never applied |
 | `TEMPORARY REDIRECT` | 302/303/307 | none; shows where it ends up |

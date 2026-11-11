@@ -62,7 +62,7 @@ rotguard reads `rotguard.toml` from the site directory (the directory you run it
 - Type: integer, milliseconds.
 - Default: `1000`.
 - Valid values: `0` or more.
-- Effect: the minimum time between the starts of two requests to the same host. It counts every request: redirect hops, retries, rechecks and soft-404 probes. `0` turns the spacing off.
+- Effect: the minimum time between the starts of two requests to the same host. It counts every request: redirect hops, retries, rechecks, soft-404 probes and the request for a fix stripped of `utm_*` pairs. `0` turns the spacing off.
 - Error: a negative number or a wrong type prints `invalid rotguard.toml`.
 
 ### `archive_interval_ms`

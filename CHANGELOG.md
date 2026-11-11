@@ -6,6 +6,18 @@ All notable changes to rotguard are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
+- A permanent redirect that only adds query parameters or a locale path segment (`/en-gb/`) no
+  longer rewrites the link: it stays as written and counts as `OK`, so a report-only run whose
+  only findings were such redirects now exits 0.
+- A permanent fix now stops before a noise step: `/old` to `/new` to `/new?language=en_US` is
+  rewritten to `/new`.
+- A fix drops the `utm_*` parameters the redirect added, keeping any the link had. Detection may
+  GET the stripped URL once more, and the strip stands only when that page has the same title.
+- A link whose fix would now be the site root (`/promo` to `/` to `/en-gb/`) is
+  `SUSPECT redirect to root` instead of rewritten, and gets a snapshot lookup like any suspect.
+
 ## [0.2.1] - 2026-11-08
 
 - A 404 or 410 is now `UNVERIFIABLE` instead of `DEAD` when the host's root answers 404 or 410
