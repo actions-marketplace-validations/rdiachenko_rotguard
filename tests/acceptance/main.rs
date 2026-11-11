@@ -20,6 +20,7 @@ mod format;
 mod lookup_order;
 mod markdown;
 mod progress;
+mod redirect_noise;
 mod release;
 mod report;
 mod root_redirect;

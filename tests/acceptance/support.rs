@@ -154,11 +154,20 @@ impl Routes {
     }
 
     /// Answers every path matching the regex with the same response every time.
-    pub fn fixed_re(mut self, pattern: &str, response: ResponseTemplate) -> Self {
+    pub fn fixed_re(self, pattern: &str, response: ResponseTemplate) -> Self {
+        self.with_re(pattern, move |_, _| response.clone())
+    }
+
+    /// Answers every path matching the regex with a handler.
+    pub fn with_re(
+        mut self,
+        pattern: &str,
+        handler: impl Fn(&Request, usize) -> ResponseTemplate + Send + Sync + 'static,
+    ) -> Self {
         self.0.push(Route {
             pattern: Pattern::Regex(Regex::new(pattern).expect("test regex")),
             hits: AtomicUsize::new(0),
-            handler: Box::new(move |_, _| response.clone()),
+            handler: Box::new(handler),
         });
         self
     }
